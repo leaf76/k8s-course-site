@@ -45,7 +45,7 @@ export const slides: Slide[] = [
 
 先讓大家看一下今天上午的議程安排：首先我們會花十分鐘快速回顧昨天學到的東西，確保大家都還記得。接下來是今天的重頭戲——ConfigMap 和 Secret，這兩個是 Kubernetes 組態管理的核心，我們會花大概 70 分鐘把它們講清楚。
 
-然後會有 15 分鐘的休息時間，讓大家去上廁所、喝咖啡。下午我們會繼續講 Resource Quota 和 Taints、Tolerations，最後用 20 分鐘做總結。
+然後會有 15 分鐘的休息時間，讓大家去上廁所、喝咖啡。休息後我們會繼續講 Resource Quota 和 Taints、Tolerations，最後用 20 分鐘做總結。
 
 今天學完之後，大家就能理解為什麼 Kubernetes 要把組態和程式碼分開管理，這個概念其實來自於 12 Factor App 的設計原則，是現代雲端應用非常重要的一個概念，我們今天也會提到。
 

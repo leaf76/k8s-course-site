@@ -105,22 +105,22 @@ export const slides: Slide[] = [
         <div className="grid grid-cols-2 gap-3">
           {[
             { day: "Day 1", topic: "Linux 基礎", icon: "🐧", detail: "命令列、檔案系統、權限" },
-            { day: "Day 2", topic: "Docker 容器", icon: "🐳", detail: "映像、容器、Dockerfile" },
-            { day: "Day 3", topic: "K8s 入門", icon: "☸️", detail: "Pod、Deployment、Service" },
-            { day: "Day 4", topic: "進階資源", icon: "📦", detail: "ConfigMap、Secret、PV/PVC" },
-            { day: "Day 5", topic: "網路與安全", icon: "🔒", detail: "Ingress、NetworkPolicy、RBAC" },
-            { day: "Day 6", topic: "可觀測性", icon: "📊", detail: "Prometheus、Grafana、logging" },
+            { day: "Day 2", topic: "Linux 實務管理", icon: "🛠️", detail: "程序、服務、套件、排錯" },
+            { day: "Day 3", topic: "Docker 容器", icon: "🐳", detail: "映像、容器、Dockerfile、Compose" },
+            { day: "Day 4", topic: "K8s 入門", icon: "☸️", detail: "架構、YAML、Pod、Deployment" },
+            { day: "Day 5", topic: "工作負載與網路", icon: "🌐", detail: "HPA、Service、Ingress、NetworkPolicy" },
+            { day: "Day 6", topic: "組態與儲存", icon: "🗄️", detail: "ConfigMap、Secret、PV/PVC、StatefulSet" },
             { day: "Day 7", topic: "實戰整合", icon: "🏆", detail: "今天，把一切串在一起！" },
           ].map((item, i) => (
             <div
               key={i}
-              className={`p-3 rounded-lg border \${i === 6 ? 'bg-k8s-blue/20 border-k8s-blue' : 'bg-slate-800/50 border-slate-700'}`}
+              className={`p-3 rounded-lg border ${i === 6 ? 'bg-k8s-blue/20 border-k8s-blue' : 'bg-slate-800/50 border-slate-700'}`}
             >
               <div className="flex items-center gap-2">
                 <span className="text-xl">{item.icon}</span>
-                <span className={`font-bold text-sm \${i === 6 ? 'text-k8s-blue' : 'text-slate-400'}`}>{item.day}</span>
+                <span className={`font-bold text-sm ${i === 6 ? 'text-k8s-blue' : 'text-slate-400'}`}>{item.day}</span>
               </div>
-              <p className={`font-semibold \${i === 6 ? 'text-white' : 'text-slate-300'}`}>{item.topic}</p>
+              <p className={`font-semibold ${i === 6 ? 'text-white' : 'text-slate-300'}`}>{item.topic}</p>
               <p className="text-slate-500 text-xs">{item.detail}</p>
             </div>
           ))}
@@ -131,15 +131,15 @@ export const slides: Slide[] = [
 
 Day 1，我們從 Linux 命令列開始。很多人那天第一次用 SSH 連進一台遠端伺服器，第一次在黑色視窗裡打指令。我記得有同學問我 ls 和 dir 有什麼差別——那個問題很正常，因為這是真的從零開始。我們學了基本的檔案操作、目錄結構、檔案權限的 rwx 讀法，還有如何用 grep 找東西、用 pipe 串接指令。這些技能現在天天都在用，你進 Pod 裡除錯的時候、查 log 的時候，用的都是 Day 1 的東西。
 
-Day 2，進入 Docker。我們理解了「容器」這個革命性的概念：把應用程式和它所有的依賴打包成一個可移植的映像，不管在哪台機器上都能跑出一樣的結果。我們學了怎麼寫 Dockerfile，怎麼 build 映像，怎麼 run 容器，怎麼把映像 push 到 Registry。容器是 Kubernetes 的前提，沒有 Day 2，就沒有後面的所有東西。
+Day 2，我們把 Linux 用到更像真實工作場景：程序與服務管理、日誌與套件安裝、環境變數與常見排錯流程。這一天讓你從「會打指令」進階到「能維運一台主機」，也為後面的容器化打下穩定基礎。
 
-Day 3，正式進入 Kubernetes。這一天是很多人的轉折點，因為 K8s 的概念層次比 Docker 複雜很多。我們學了 Pod 是什麼、為什麼需要 Deployment 而不是直接管理 Pod、Service 如何讓 Pod 對外提供穩定的存取點。還記得第一次 kubectl apply 成功的感覺嗎？那個瞬間真的很有成就感。
+Day 3，進入 Docker。我們理解了「容器」這個革命性的概念：把應用程式和它所有的依賴打包成一個可移植的映像，不管在哪台機器上都能跑出一樣的結果。我們學了怎麼寫 Dockerfile，怎麼 build 映像，怎麼 run 容器，怎麼把映像 push 到 Registry。容器是 Kubernetes 的前提，沒有 Day 3，就沒有後面的所有東西。
 
-Day 4，深入設定與儲存。ConfigMap 讓你把設定值從程式碼裡拆出來，不同環境可以用不同設定。Secret 讓你安全地管理密碼和憑證，不把敏感資訊寫死在 YAML 裡。PersistentVolume 和 PVC 解決了容器重啟後資料消失的問題，讓資料庫這類有狀態的應用也能在 K8s 上跑。
+Day 4，正式進入 Kubernetes。這一天是很多人的轉折點，因為 K8s 的概念層次比 Docker 複雜很多。我們學了架構、YAML、Pod 是什麼、為什麼需要 Deployment 而不是直接管理 Pod。還記得第一次 kubectl apply 成功的感覺嗎？那個瞬間真的很有成就感。
 
-Day 5，網路與安全。Ingress 讓外部的流量有個統一的入口，根據網域名稱或路徑分發到不同的服務。NetworkPolicy 讓你控制 Pod 之間的通訊，就像在應用層面架了防火牆。RBAC 管理誰可以對叢集做什麼操作，這是企業環境的必備。
+Day 5，深入工作負載與網路。Service 讓 Pod 對外提供穩定存取點，Ingress 負責統一入口路由，HPA 負責流量高峰時的自動擴縮，NetworkPolicy 負責限制不該互通的流量。這一天讓你開始用「生產環境」思維設計服務。
 
-Day 6，可觀測性。系統上線之後，你怎麼知道它有沒有問題？怎麼在問題發生前就察覺到異常？Prometheus 收集指標，Grafana 畫出漂亮的儀表板，Loki 做日誌聚合，再加上告警規則，讓你的系統「透明」起來。
+Day 6，聚焦組態與儲存。ConfigMap 和 Secret 讓設定與敏感資訊不再寫死在程式碼裡，Resource Quota 與調度策略讓叢集資源更可控，PV/PVC 與 StatefulSet 讓有狀態服務也能在 K8s 上穩定運行。
 
 Day 7 就是今天。我們要用一個真實的場景，把前六天所有的知識點全部用一遍。你會發現，每一個你曾經「好像懂了」的概念，放到整合場景裡都會重新變清晰，因為你看到了它在整個系統裡扮演的角色。這種體驗是任何文件都無法給你的。開始吧！
 

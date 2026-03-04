@@ -153,8 +153,8 @@ export const slides: Slide[] = [
               textColor: 'text-orange-400',
             },
           ].map((item, i) => (
-            <div key={i} className={`\${item.color} border p-4 rounded-lg`}>
-              <p className={`\${item.textColor} font-semibold`}>
+            <div key={i} className={`${item.color} border p-4 rounded-lg`}>
+              <p className={`${item.textColor} font-semibold`}>
                 {item.icon} {item.title}
               </p>
               <p className="text-slate-300 text-sm mt-1">{item.desc}</p>
@@ -360,10 +360,10 @@ Recreate 策略就簡單暴力很多，先把所有舊 Pod 全部刪掉，然後
               example: '舊系統啟動需要 2 分鐘',
             },
           ].map((probe, i) => (
-            <div key={i} className={`\${probe.color} border p-4 rounded-lg`}>
+            <div key={i} className={`${probe.color} border p-4 rounded-lg`}>
               <div className="flex items-start justify-between">
                 <div>
-                  <p className={`\${probe.textColor} font-bold text-lg`}>
+                  <p className={`${probe.textColor} font-bold text-lg`}>
                     {probe.icon} {probe.name}
                   </p>
                   <p className="text-slate-300 text-sm">{probe.question}</p>
@@ -632,10 +632,10 @@ Request 和 Limit 都設定是最佳實踐。如果都不設，那個容器可�
               example: '不建議在生產環境使用',
             },
           ].map((qos, i) => (
-            <div key={i} className={`\${qos.color} border p-4 rounded-lg`}>
+            <div key={i} className={`${qos.color} border p-4 rounded-lg`}>
               <div className="flex items-start justify-between gap-4">
                 <div className="space-y-1">
-                  <p className={`\${qos.textColor} font-bold text-lg`}>
+                  <p className={`${qos.textColor} font-bold text-lg`}>
                     {qos.icon} {qos.name}
                   </p>
                   <p className="text-slate-300 text-sm">條件：{qos.condition}</p>
@@ -1152,8 +1152,8 @@ spec:
             { label: '選 StatefulSet', items: ['MySQL / PostgreSQL', 'Kafka / RabbitMQ', 'Elasticsearch'], color: 'bg-green-900/30 border-green-700', textColor: 'text-green-400' },
             { label: '選 DaemonSet', items: ['日誌收集', '節點監控', 'CNI 插件'], color: 'bg-purple-900/30 border-purple-700', textColor: 'text-purple-400' },
           ].map((col, i) => (
-            <div key={i} className={`\${col.color} border p-3 rounded-lg`}>
-              <p className={`\${col.textColor} font-semibold mb-2`}>{col.label}</p>
+            <div key={i} className={`${col.color} border p-3 rounded-lg`}>
+              <p className={`${col.textColor} font-semibold mb-2`}>{col.label}</p>
               {col.items.map((item, j) => (
                 <p key={j} className="text-slate-300">{item}</p>
               ))}
@@ -1232,8 +1232,8 @@ StatefulSet 的 Pod 建立和刪除都有嚴格的順序：建立時從序號 0 
               textColor: 'text-orange-400',
             },
           ].map((item, i) => (
-            <div key={i} className={`\${item.color} border p-3 rounded-lg`}>
-              <p className={`\${item.textColor} font-bold mb-2`}>
+            <div key={i} className={`${item.color} border p-3 rounded-lg`}>
+              <p className={`${item.textColor} font-bold mb-2`}>
                 {item.icon} {item.title}
               </p>
               <ul className="text-slate-300 text-xs space-y-1">

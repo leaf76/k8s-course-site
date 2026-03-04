@@ -389,12 +389,12 @@ cgroup（Control Groups）控制每個容器的資源用量，是後面資源限
               items: ["Image 的執行實例", "有獨立的讀寫層", "可啟動、停止、刪除", "類比：程式執行中的 Process"],
             },
           ].map((box) => (
-            <div key={box.label} className={`bg-slate-800/50 p-4 rounded-lg border border-\${box.color}-700/50`}>
-              <p className={`font-bold text-\${box.color}-400 mb-2`}>{box.label}</p>
+            <div key={box.label} className={`bg-slate-800/50 p-4 rounded-lg border border-${box.color}-700/50`}>
+              <p className={`font-bold text-${box.color}-400 mb-2`}>{box.label}</p>
               <ul className="space-y-1">
                 {box.items.map((item, j) => (
                   <li key={j} className="text-slate-300 text-sm flex items-start gap-2">
-                    <span className={`text-\${box.color}-400`}>•</span>
+                    <span className={`text-${box.color}-400`}>•</span>
                     {item}
                   </li>
                 ))}

@@ -78,7 +78,7 @@ export const slides: Slide[] = [
           { time: '16:25–16:40', topic: '進階 kubectl 技巧', icon: '🛠️' },
           { time: '16:40–16:50', topic: 'Q&A', icon: '💬' },
         ].map((item, i) => (
-          <div key={i} className={`flex items-center gap-4 p-3 rounded-lg \${item.topic.includes('休息') ? 'bg-yellow-900/30 border border-yellow-700/50' : 'bg-slate-800/50'}`}>
+          <div key={i} className={`flex items-center gap-4 p-3 rounded-lg ${item.topic.includes('休息') ? 'bg-yellow-900/30 border border-yellow-700/50' : 'bg-slate-800/50'}`}>
             <span className="text-xl w-8 text-center">{item.icon}</span>
             <div className="flex-1">
               <span className="text-k8s-blue text-sm mr-3">{item.time}</span>
@@ -519,8 +519,8 @@ delete 的補充：kubectl delete deployment nginx-deployment 刪掉 Deployment 
             { status: 'OOMKilled', color: 'red', desc: '記憶體超出 limit' },
             { status: 'Completed', color: 'purple', desc: '容器成功執行完畢（Job）' },
           ].map((s, i) => (
-            <div key={i} className={`bg-\${s.color}-900/30 border border-\${s.color}-700/50 p-3 rounded-lg`}>
-              <p className={`text-\${s.color}-400 font-semibold text-xs font-mono`}>{s.status}</p>
+            <div key={i} className={`bg-${s.color}-900/30 border border-${s.color}-700/50 p-3 rounded-lg`}>
+              <p className={`text-${s.color}-400 font-semibold text-xs font-mono`}>{s.status}</p>
               <p className="text-slate-300 text-xs mt-1">{s.desc}</p>
             </div>
           ))}
@@ -573,8 +573,8 @@ Pod 的 terminationGracePeriodSeconds（優雅停止期）預設是 30 秒，代
                 { ns: 'kube-system', desc: 'K8s 系統元件', pods: ['coredns', 'kube-proxy'], color: 'red' },
                 { ns: 'production', desc: '生產環境', pods: ['api-server', 'db-proxy'], color: 'green' },
               ].map((ns, i) => (
-                <div key={i} className={`bg-\${ns.color}-900/30 border border-\${ns.color}-700/50 p-3 rounded-lg`}>
-                  <p className={`text-\${ns.color}-400 font-semibold text-sm`}>{ns.ns}</p>
+                <div key={i} className={`bg-${ns.color}-900/30 border border-${ns.color}-700/50 p-3 rounded-lg`}>
+                  <p className={`text-${ns.color}-400 font-semibold text-sm`}>{ns.ns}</p>
                   <p className="text-slate-500 text-xs mb-2">{ns.desc}</p>
                   {ns.pods.map((p, j) => (
                     <div key={j} className="bg-slate-700/50 p-1 rounded text-xs text-slate-300 mb-1">{p}</div>
