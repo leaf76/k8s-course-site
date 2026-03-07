@@ -241,6 +241,8 @@ function App() {
   const pendingAudienceSlideRef = useRef<number | null>(null)
   const lastAudienceSignalAtRef = useRef<number | null>(null)
   const hasReceivedInitialSyncRef = useRef(false)
+  const audienceManualNavRef = useRef(false)
+  const audienceManualTimerRef = useRef<number | null>(null)
   const isAudienceView = viewMode === 'audience'
   const isPresenterModeEnabled = viewMode === 'presenter' && Boolean(sessionId)
   const { latestMessage, transportStatus, sendMessage } = usePresentationChannel(sessionId)
@@ -311,6 +313,21 @@ function App() {
   const nextSlide = useCallback(() => goToSlide(currentSlide + 1), [currentSlide, goToSlide])
   const prevSlide = useCallback(() => goToSlide(currentSlide - 1), [currentSlide, goToSlide])
 
+  const audienceNav = useCallback((direction: 'next' | 'prev') => {
+    audienceManualNavRef.current = true
+    if (audienceManualTimerRef.current) {
+      window.clearTimeout(audienceManualTimerRef.current)
+    }
+    audienceManualTimerRef.current = window.setTimeout(() => {
+      audienceManualNavRef.current = false
+    }, 10000)
+    if (direction === 'next') {
+      goToSlide(currentSlide + 1)
+    } else {
+      goToSlide(currentSlide - 1)
+    }
+  }, [currentSlide, goToSlide])
+
   const postPresentationMessage = useCallback(
     (type: 'SYNC_STATE' | 'REQUEST_SYNC' | 'HEARTBEAT' | 'END_SESSION', lessonId: string, slideIndex: number): boolean => {
       if (!sessionId) {
@@ -366,9 +383,9 @@ function App() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (isAudienceView) {
         if (e.key === 'ArrowRight' || e.key === 'PageDown') {
-          e.preventDefault(); nextSlide()
+          e.preventDefault(); audienceNav('next')
         } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
-          e.preventDefault(); prevSlide()
+          e.preventDefault(); audienceNav('prev')
         }
         return
       }
@@ -396,7 +413,7 @@ function App() {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isAudienceView, isPresenterModeEnabled, nextSlide, prevSlide, startPresenterMode, stopPresenterMode])
+  }, [audienceNav, isAudienceView, isPresenterModeEnabled, nextSlide, prevSlide, startPresenterMode, stopPresenterMode])
 
   const slide: Slide = slides[currentSlide] || slides[0]
   const lesson = LESSONS[currentLesson]
@@ -498,7 +515,9 @@ function App() {
       return
     }
 
-    goToSlide(Math.min(Math.max(latestMessage.slideIndex, 0), Math.max(slides.length - 1, 0)))
+    if (!audienceManualNavRef.current) {
+      goToSlide(Math.min(Math.max(latestMessage.slideIndex, 0), Math.max(slides.length - 1, 0)))
+    }
   }, [
     currentLesson,
     currentSlide,
@@ -663,8 +682,8 @@ function App() {
         connectionState={audienceConnectionState}
         currentSlide={currentSlide}
         totalSlides={slides.length}
-        onPrev={prevSlide}
-        onNext={nextSlide}
+        onPrev={() => audienceNav('prev')}
+        onNext={() => audienceNav('next')}
       />
     )
   }
