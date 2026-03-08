@@ -1,0 +1,12 @@
+{
+  "name": "@k8s-course-site/presenter-sync",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.71.0"
+  }
+}

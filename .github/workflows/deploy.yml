@@ -25,6 +25,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+        env:
+          VITE_PRESENTATION_SYNC_MODE: ${{ vars.VITE_PRESENTATION_SYNC_MODE }}
+          VITE_PRESENTATION_SYNC_URL: ${{ vars.VITE_PRESENTATION_SYNC_URL }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

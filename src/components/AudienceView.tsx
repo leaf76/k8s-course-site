@@ -8,6 +8,7 @@ interface AudienceViewProps {
   slide: Slide | null
   loading: boolean
   connectionState: AudienceConnectionState
+  controlsEnabled: boolean
   currentSlide: number
   totalSlides: number
   onPrev: () => void
@@ -30,12 +31,40 @@ function getConnectionLabel(state: AudienceConnectionState): string {
   return 'Session missing'
 }
 
+function getAudienceStatusBadge(
+  connectionState: AudienceConnectionState,
+  controlsEnabled: boolean,
+): { label: string, className: string } | null {
+  if (connectionState === 'connected') {
+    if (!controlsEnabled) {
+      return {
+        label: 'Read-only',
+        className: 'bg-slate-900/80 text-slate-300 border-slate-700/80',
+      }
+    }
+    return null
+  }
+
+  if (connectionState === 'disconnected') {
+    return {
+      label: 'Disconnected',
+      className: 'bg-red-900/70 text-red-200 border-red-700/80',
+    }
+  }
+
+  return {
+    label: getConnectionLabel(connectionState),
+    className: 'bg-amber-900/70 text-amber-200 border-amber-700/80',
+  }
+}
+
 export default function AudienceView({
   lessonLabel,
   lessonTitle,
   slide,
   loading,
   connectionState,
+  controlsEnabled,
   currentSlide,
   totalSlides,
   onPrev,
@@ -43,24 +72,21 @@ export default function AudienceView({
 }: AudienceViewProps) {
   const showWaitingState = loading || connectionState === 'loading'
   const showError = connectionState === 'missing-session' || connectionState === 'unsupported'
+  const statusBadge = getAudienceStatusBadge(connectionState, controlsEnabled)
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
-      <div className="fixed top-4 left-4 right-4 flex items-center justify-between z-20 pointer-events-none">
+      <div className="fixed top-4 left-4 right-4 flex items-start justify-between z-20 pointer-events-none gap-4">
         <div className="bg-slate-900/80 border border-slate-700/60 rounded-lg px-3 py-1.5 text-xs text-slate-300">
           {lessonLabel} · {lessonTitle}
         </div>
-        <div
-          className={`rounded-lg px-3 py-1.5 text-xs border ${
-            connectionState === 'connected'
-              ? 'bg-emerald-900/70 text-emerald-200 border-emerald-700/80'
-              : connectionState === 'disconnected'
-              ? 'bg-red-900/70 text-red-200 border-red-700/80'
-              : 'bg-amber-900/70 text-amber-200 border-amber-700/80'
-          }`}
-        >
-          {getConnectionLabel(connectionState)}
-        </div>
+        {statusBadge && (
+          <div
+            className={`rounded-lg px-3 py-1.5 text-xs border ${statusBadge.className}`}
+          >
+            {statusBadge.label}
+          </div>
+        )}
       </div>
 
       <div className="min-h-screen flex items-center justify-center p-6 md:p-10">
@@ -79,7 +105,7 @@ export default function AudienceView({
             <p className="text-slate-300 mt-2">
               {connectionState === 'missing-session'
                 ? 'No active session was provided.'
-                : 'Your browser does not support cross-window sync for this mode.'}
+                : 'Presenter sync is unavailable for the current mode.'}
             </p>
           </div>
         )}
@@ -131,7 +157,7 @@ export default function AudienceView({
         <div className="fixed bottom-6 left-0 right-0 flex items-center justify-center gap-4 z-20">
           <button
             onClick={onPrev}
-            disabled={currentSlide <= 0}
+            disabled={!controlsEnabled || currentSlide <= 0}
             className="px-5 py-2.5 rounded-lg text-sm font-medium transition-all
               bg-slate-800/80 border border-slate-600/60 text-slate-200
               hover:bg-slate-700/80 hover:border-slate-500
@@ -144,7 +170,7 @@ export default function AudienceView({
           </span>
           <button
             onClick={onNext}
-            disabled={currentSlide >= totalSlides - 1}
+            disabled={!controlsEnabled || currentSlide >= totalSlides - 1}
             className="px-5 py-2.5 rounded-lg text-sm font-medium transition-all
               bg-slate-800/80 border border-slate-600/60 text-slate-200
               hover:bg-slate-700/80 hover:border-slate-500

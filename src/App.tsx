@@ -4,11 +4,19 @@ import type { Slide } from './slides/lesson1-morning/index'
 import AudienceView from './components/AudienceView'
 import { usePresentationChannel } from './hooks/usePresentationChannel'
 import {
+  canAudienceControlPresenter,
   createPresentationMessage,
+  isPresenterBroadcastMessage,
+  parseControlToken,
   parseSessionId,
   parseViewMode,
+  shouldAcceptAudienceControlMessage,
   type ViewMode,
 } from './types/presentation'
+import {
+  getPresentationSyncCapabilityLabel,
+  isPresentationTransportActive,
+} from './types/presentationTransport'
 
 // 課程列表
 const LESSONS = [
@@ -206,12 +214,58 @@ function createSessionId(): string {
   return `session-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
-function buildAudienceUrl(sessionId: string, lessonId: string): string {
+function buildAudienceUrl(sessionId: string, lessonId: string, controlToken?: string | null): string {
   const url = new URL(window.location.href)
   url.searchParams.set('view', 'audience')
   url.searchParams.set('session', sessionId)
+  if (controlToken) {
+    url.searchParams.set('control', controlToken)
+  } else {
+    url.searchParams.delete('control')
+  }
   url.hash = lessonId
   return url.toString()
+}
+
+function buildPresenterControlStorageKey(sessionId: string): string {
+  return `k8s-course-presenter-control:${sessionId}`
+}
+
+function readPresenterControlToken(sessionId: string | null): string | null {
+  if (!sessionId || typeof window === 'undefined') {
+    return null
+  }
+
+  try {
+    const token = window.sessionStorage.getItem(buildPresenterControlStorageKey(sessionId))
+    return token && token.trim().length > 0 ? token : null
+  } catch {
+    return null
+  }
+}
+
+function persistPresenterControlToken(sessionId: string, controlToken: string): void {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  try {
+    window.sessionStorage.setItem(buildPresenterControlStorageKey(sessionId), controlToken)
+  } catch {
+    // Ignore storage failures and keep the URL token as fallback.
+  }
+}
+
+function clearPresenterControlToken(sessionId: string | null): void {
+  if (!sessionId || typeof window === 'undefined') {
+    return
+  }
+
+  try {
+    window.sessionStorage.removeItem(buildPresenterControlStorageKey(sessionId))
+  } catch {
+    // Ignore storage failures on cleanup.
+  }
 }
 
 function isAdminPath(): boolean {
@@ -224,6 +278,20 @@ function App() {
   const [isAdmin] = useState(isAdminPath)
   const [viewMode, setViewMode] = useState<ViewMode>(() => parseViewMode(window.location.search))
   const [sessionId, setSessionId] = useState<string | null>(() => parseSessionId(window.location.search))
+  const [controlToken, setControlToken] = useState<string | null>(() => {
+    const urlControlToken = parseControlToken(window.location.search)
+    if (urlControlToken) {
+      return urlControlToken
+    }
+
+    const initialViewMode = parseViewMode(window.location.search)
+    const initialSessionId = parseSessionId(window.location.search)
+    if (initialViewMode === 'presenter') {
+      return readPresenterControlToken(initialSessionId)
+    }
+
+    return null
+  })
   const [currentLesson, setCurrentLesson] = useState(getLessonIndexFromHash)
   const [currentSlide, setCurrentSlide] = useState(0)
   const [showNotes, setShowNotes] = useState(false)
@@ -240,6 +308,7 @@ function App() {
   )
   const [presenterError, setPresenterError] = useState<string | null>(null)
   const [manualAudienceUrl, setManualAudienceUrl] = useState<string | null>(null)
+  const [copyAudienceUrlState, setCopyAudienceUrlState] = useState<'idle' | 'copied' | 'error'>('idle')
   const [sessionStartedAt, setSessionStartedAt] = useState<number | null>(null)
   const [clockTick, setClockTick] = useState(() => Date.now())
   const [timerPaused, setTimerPaused] = useState(false)
@@ -248,10 +317,15 @@ function App() {
   const pendingAudienceSlideRef = useRef<number | null>(null)
   const lastAudienceSignalAtRef = useRef<number | null>(null)
   const hasReceivedInitialSyncRef = useRef(false)
-  const audienceManualNavRef = useRef(false)
   const isAudienceView = viewMode === 'audience'
   const isPresenterModeEnabled = viewMode === 'presenter' && Boolean(sessionId)
-  const { latestMessage, transportStatus, sendMessage } = usePresentationChannel(sessionId)
+  const audienceControlsEnabled = canAudienceControlPresenter(viewMode, sessionId, controlToken)
+  const channelSenderRole = viewMode === 'presenter' ? 'presenter' : 'audience'
+  const { latestMessage, transportStatus, syncCapability, sendMessage } = usePresentationChannel(sessionId, {
+    senderRole: channelSenderRole,
+    controlToken: viewMode === 'audience' ? controlToken : null,
+  })
+  const isTransportReady = isPresentationTransportActive(transportStatus)
 
   // 切換課程（同步 URL hash）
   const switchLesson = useCallback((idx: number) => {
@@ -268,9 +342,11 @@ function App() {
     if (viewMode === 'presenter' && sessionId) {
       url.searchParams.set('view', 'presenter')
       url.searchParams.set('session', sessionId)
+      url.searchParams.delete('control')
     } else {
       url.searchParams.delete('view')
       url.searchParams.delete('session')
+      url.searchParams.delete('control')
     }
     window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
   }, [isAudienceView, sessionId, viewMode])
@@ -320,28 +396,45 @@ function App() {
   const prevSlide = useCallback(() => goToSlide(currentSlide - 1), [currentSlide, goToSlide])
 
   const audienceNav = useCallback((direction: 'next' | 'prev') => {
-    audienceManualNavRef.current = true
-    if (direction === 'next') {
-      goToSlide(currentSlide + 1)
-    } else {
-      goToSlide(currentSlide - 1)
+    if (!audienceControlsEnabled || !sessionId || !controlToken) {
+      return
     }
-  }, [currentSlide, goToSlide])
+
+    const nextIndex = direction === 'next' ? currentSlide + 1 : currentSlide - 1
+    if (nextIndex < 0 || nextIndex >= slides.length) {
+      return
+    }
+
+    goToSlide(nextIndex)
+    sendMessage(
+      createPresentationMessage('SYNC_STATE', sessionId, LESSONS[currentLesson].id, nextIndex, 'audience', {
+        controlToken,
+      }),
+    )
+  }, [audienceControlsEnabled, controlToken, currentLesson, currentSlide, goToSlide, sendMessage, sessionId, slides.length])
 
   const postPresentationMessage = useCallback(
-    (type: 'SYNC_STATE' | 'REQUEST_SYNC' | 'HEARTBEAT' | 'END_SESSION', lessonId: string, slideIndex: number): boolean => {
+    (
+      type: 'SYNC_STATE' | 'REQUEST_SYNC' | 'HEARTBEAT' | 'END_SESSION',
+      lessonId: string,
+      slideIndex: number,
+      senderRole: 'presenter' | 'audience',
+      options?: { controlToken?: string | null },
+    ): boolean => {
       if (!sessionId) {
         return false
       }
-      return sendMessage(createPresentationMessage(type, sessionId, lessonId, slideIndex))
+      return sendMessage(createPresentationMessage(type, sessionId, lessonId, slideIndex, senderRole, options))
     },
     [sendMessage, sessionId],
   )
 
   const startPresenterMode = useCallback(() => {
     const activeSessionId = sessionId ?? createSessionId()
+    const activeControlToken = createSessionId()
     const activeLessonId = LESSONS[currentLesson].id
-    const audienceUrl = buildAudienceUrl(activeSessionId, activeLessonId)
+    const audienceUrl = buildAudienceUrl(activeSessionId, activeLessonId, activeControlToken)
+    persistPresenterControlToken(activeSessionId, activeControlToken)
 
     const openedWindow = window.open(audienceUrl, `k8s-audience-${activeSessionId}`, 'popup=yes,width=1366,height=768')
     if (!openedWindow) {
@@ -349,6 +442,7 @@ function App() {
       setManualAudienceUrl(audienceUrl)
       setViewMode('presenter')
       setSessionId(activeSessionId)
+      setControlToken(activeControlToken)
       setPresenterSyncStatus('disconnected')
       return
     }
@@ -358,26 +452,69 @@ function App() {
     setManualAudienceUrl(null)
     setViewMode('presenter')
     setSessionId(activeSessionId)
+    setControlToken(activeControlToken)
     setSessionStartedAt(Date.now())
     setPresenterSyncStatus('connecting')
   }, [currentLesson, sessionId])
 
+  const reopenAudienceWindow = useCallback(() => {
+    if (!sessionId || !controlToken) {
+      startPresenterMode()
+      return
+    }
+
+    const lessonId = LESSONS[currentLesson].id
+    const audienceUrl = buildAudienceUrl(sessionId, lessonId, controlToken)
+    const openedWindow = window.open(audienceUrl, `k8s-audience-${sessionId}`, 'popup=yes,width=1366,height=768')
+
+    if (!openedWindow) {
+      setPresenterError('Popup blocked. Allow popups for this site and try again.')
+      setManualAudienceUrl(audienceUrl)
+      setPresenterSyncStatus('disconnected')
+      return
+    }
+
+    audienceWindowRef.current = openedWindow
+    setPresenterError(null)
+    setManualAudienceUrl(null)
+    setPresenterSyncStatus('connecting')
+    postPresentationMessage('SYNC_STATE', lessonId, currentSlide, 'presenter')
+  }, [controlToken, currentLesson, currentSlide, postPresentationMessage, sessionId, startPresenterMode])
+
   const stopPresenterMode = useCallback(() => {
     const lessonId = LESSONS[currentLesson].id
-    postPresentationMessage('END_SESSION', lessonId, currentSlide)
+    postPresentationMessage('END_SESSION', lessonId, currentSlide, 'presenter')
     if (audienceWindowRef.current && !audienceWindowRef.current.closed) {
       audienceWindowRef.current.close()
     }
     audienceWindowRef.current = null
+    clearPresenterControlToken(sessionId)
     setViewMode('single')
     setSessionId(null)
+    setControlToken(null)
     setSessionStartedAt(null)
     setTimerPaused(false)
     setPausedElapsed(0)
     setPresenterError(null)
     setManualAudienceUrl(null)
+    setCopyAudienceUrlState('idle')
     setPresenterSyncStatus('idle')
-  }, [currentLesson, currentSlide, postPresentationMessage])
+  }, [currentLesson, currentSlide, postPresentationMessage, sessionId])
+
+  const copyAudienceUrl = useCallback(async () => {
+    if (!sessionId) {
+      return
+    }
+
+    const audienceUrl = buildAudienceUrl(sessionId, LESSONS[currentLesson].id)
+
+    try {
+      await navigator.clipboard.writeText(audienceUrl)
+      setCopyAudienceUrlState('copied')
+    } catch {
+      setCopyAudienceUrlState('error')
+    }
+  }, [currentLesson, sessionId])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -413,7 +550,7 @@ function App() {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [audienceNav, isAudienceView, isPresenterModeEnabled, nextSlide, prevSlide, startPresenterMode, stopPresenterMode])
+  }, [audienceNav, isAdmin, isAudienceView, isPresenterModeEnabled, nextSlide, prevSlide, startPresenterMode, stopPresenterMode])
 
   const slide: Slide = slides[currentSlide] || slides[0]
   const lesson = LESSONS[currentLesson]
@@ -446,22 +583,31 @@ function App() {
       return
     }
 
-    if (isAudienceView && transportStatus === 'unsupported') {
+    if (isAudienceView && (transportStatus === 'unsupported' || transportStatus === 'error')) {
       setAudienceConnectionState('unsupported')
       return
     }
 
-    if (isAudienceView && !hasReceivedInitialSyncRef.current) {
+    if (isAudienceView && (!isTransportReady || !hasReceivedInitialSyncRef.current)) {
       setAudienceConnectionState('loading')
     }
-  }, [isAudienceView, sessionId, transportStatus])
+  }, [isAudienceView, isTransportReady, sessionId, transportStatus])
 
   useEffect(() => {
-    if (transportStatus !== 'ready') {
-      if (isPresenterModeEnabled && transportStatus === 'unsupported') {
+    if (!isTransportReady) {
+      if (isPresenterModeEnabled && transportStatus === 'connecting') {
         // eslint-disable-next-line react-hooks/set-state-in-effect
+        setPresenterSyncStatus('connecting')
+        setPresenterError(null)
+      }
+
+      if (isPresenterModeEnabled && (transportStatus === 'unsupported' || transportStatus === 'error')) {
         setPresenterSyncStatus('unsupported')
-        setPresenterError('BroadcastChannel is not supported in this browser.')
+        setPresenterError(
+          transportStatus === 'unsupported'
+            ? 'This browser cannot provide presenter sync in the selected mode.'
+            : 'Cross-browser sync could not connect. Check your sync setup and try again.',
+        )
       }
       return
     }
@@ -470,14 +616,37 @@ function App() {
       return
     }
 
-    if (isPresenterModeEnabled && latestMessage.type === 'REQUEST_SYNC') {
+    if (isPresenterModeEnabled && latestMessage.type === 'REQUEST_SYNC' && latestMessage.senderRole === 'audience') {
       setPresenterSyncStatus('connected')
       setPresenterError(null)
-      postPresentationMessage('SYNC_STATE', lesson.id, currentSlide)
+      postPresentationMessage('SYNC_STATE', lesson.id, currentSlide, 'presenter')
+      return
+    }
+
+    if (isPresenterModeEnabled && shouldAcceptAudienceControlMessage(latestMessage, controlToken)) {
+      const syncedLessonIndex = LESSONS.findIndex((item) => item.id === latestMessage.lessonId)
+      if (syncedLessonIndex === -1) {
+        return
+      }
+
+      setPresenterSyncStatus('connected')
+      setPresenterError(null)
+
+      if (syncedLessonIndex !== currentLesson) {
+        setCurrentLesson(syncedLessonIndex)
+        window.location.hash = latestMessage.lessonId
+        return
+      }
+
+      goToSlide(Math.min(Math.max(latestMessage.slideIndex, 0), Math.max(slides.length - 1, 0)))
       return
     }
 
     if (!isAudienceView) {
+      return
+    }
+
+    if (!isPresenterBroadcastMessage(latestMessage)) {
       return
     }
 
@@ -495,7 +664,7 @@ function App() {
       return
     }
 
-    if (latestMessage.type !== 'SYNC_STATE') {
+    if (latestMessage.type !== 'SYNC_STATE' || latestMessage.senderRole !== 'presenter') {
       return
     }
 
@@ -515,10 +684,9 @@ function App() {
       return
     }
 
-    if (!audienceManualNavRef.current) {
-      goToSlide(Math.min(Math.max(latestMessage.slideIndex, 0), Math.max(slides.length - 1, 0)))
-    }
+    goToSlide(Math.min(Math.max(latestMessage.slideIndex, 0), Math.max(slides.length - 1, 0)))
   }, [
+    controlToken,
     currentLesson,
     currentSlide,
     goToSlide,
@@ -528,42 +696,43 @@ function App() {
     lesson.id,
     postPresentationMessage,
     slides.length,
+    isTransportReady,
     transportStatus,
   ])
 
   useEffect(() => {
-    if (!isAudienceView || !sessionId || transportStatus !== 'ready') {
+    if (!isAudienceView || !sessionId || !isTransportReady) {
       return
     }
 
-    postPresentationMessage('REQUEST_SYNC', lesson.id, currentSlide)
+    postPresentationMessage('REQUEST_SYNC', lesson.id, 0, 'audience')
     const retryTimer = window.setInterval(() => {
       if (!hasReceivedInitialSyncRef.current) {
-        postPresentationMessage('REQUEST_SYNC', lesson.id, currentSlide)
+        postPresentationMessage('REQUEST_SYNC', lesson.id, 0, 'audience')
       }
     }, 2000)
 
     return () => window.clearInterval(retryTimer)
-  }, [currentSlide, isAudienceView, lesson.id, postPresentationMessage, sessionId, transportStatus])
+  }, [isAudienceView, isTransportReady, lesson.id, postPresentationMessage, sessionId])
 
   useEffect(() => {
-    if (!isPresenterModeEnabled || transportStatus !== 'ready') {
+    if (!isPresenterModeEnabled || !isTransportReady) {
       return
     }
-    postPresentationMessage('SYNC_STATE', lesson.id, currentSlide)
-  }, [currentSlide, isPresenterModeEnabled, lesson.id, postPresentationMessage, transportStatus])
+    postPresentationMessage('SYNC_STATE', lesson.id, currentSlide, 'presenter')
+  }, [currentSlide, isPresenterModeEnabled, isTransportReady, lesson.id, postPresentationMessage])
 
   useEffect(() => {
-    if (!isPresenterModeEnabled || transportStatus !== 'ready') {
+    if (!isPresenterModeEnabled || !isTransportReady) {
       return
     }
 
     const heartbeatTimer = window.setInterval(() => {
-      postPresentationMessage('HEARTBEAT', lesson.id, currentSlide)
+      postPresentationMessage('HEARTBEAT', lesson.id, currentSlide, 'presenter')
     }, 2000)
 
     return () => window.clearInterval(heartbeatTimer)
-  }, [currentSlide, isPresenterModeEnabled, lesson.id, postPresentationMessage, transportStatus])
+  }, [currentSlide, isPresenterModeEnabled, isTransportReady, lesson.id, postPresentationMessage])
 
   useEffect(() => {
     if (!isPresenterModeEnabled) {
@@ -626,6 +795,18 @@ function App() {
     }
   }, [isAudienceView, sessionId])
 
+  useEffect(() => {
+    if (copyAudienceUrlState === 'idle') {
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      setCopyAudienceUrlState('idle')
+    }, 2000)
+
+    return () => window.clearTimeout(timer)
+  }, [copyAudienceUrlState])
+
   // 解析所有投影片 notes 中的 Q&A
   const qaItems = useMemo(() => {
     const marker = '\u3010\u9810\u671f\u96e3\u641e\u5b78\u54e1\u554f\u984c'
@@ -669,9 +850,11 @@ function App() {
     : presenterSyncStatus === 'disconnected'
     ? 'Audience disconnected'
     : presenterSyncStatus === 'unsupported'
-    ? 'Browser unsupported'
+    ? 'Sync unavailable'
     : 'Presenter mode off'
-
+  const presenterTransportLabel = syncCapability === 'same-browser' && transportStatus === 'fallback'
+    ? 'Same-browser fallback'
+    : getPresentationSyncCapabilityLabel(syncCapability)
   if (isAudienceView) {
     return (
       <AudienceView
@@ -680,6 +863,7 @@ function App() {
         slide={slide || null}
         loading={loading}
         connectionState={audienceConnectionState}
+        controlsEnabled={audienceControlsEnabled}
         currentSlide={currentSlide}
         totalSlides={slides.length}
         onPrev={() => audienceNav('prev')}
@@ -1035,7 +1219,7 @@ function App() {
               </a>
             )}
             <button
-              onClick={startPresenterMode}
+              onClick={reopenAudienceWindow}
               className="mt-3 px-3 py-1.5 text-sm rounded bg-red-700 hover:bg-red-600 transition-colors"
             >
               Retry opening audience window
@@ -1130,33 +1314,6 @@ function App() {
                   </div>
                 </div>
 
-                <div className="bg-slate-900/70 border border-slate-700 rounded-xl p-4">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-slate-400">Presenter timer</span>
-                    <div className="flex items-center gap-3">
-                      <span className={`font-semibold tabular-nums text-lg ${timerPaused ? 'text-amber-400' : 'text-slate-200'}`}>
-                        {elapsedMinutes}:{elapsedRemainderSeconds.toString().padStart(2, '0')}
-                      </span>
-                      <button
-                        onClick={toggleTimerPause}
-                        className={`px-3 py-1 rounded-lg text-sm font-medium transition-colors ${
-                          timerPaused
-                            ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
-                            : 'bg-amber-600 hover:bg-amber-500 text-white'
-                        }`}
-                        title={timerPaused ? '繼續計時' : '暫停計時'}
-                      >
-                        {timerPaused ? '▶ 繼續' : '⏸ 暫停'}
-                      </button>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between mt-2 text-xs">
-                    <span className="text-slate-500">{presenterStatusLabel}</span>
-                    <span className="text-slate-500">
-                      {currentSlide + 1} / {slides.length}
-                    </span>
-                  </div>
-                </div>
               </div>
             </div>
           ) : (
@@ -1253,6 +1410,26 @@ function App() {
               <span className="text-slate-400 text-sm hidden md:block">{lesson.label}</span>
               <span className="text-slate-600 hidden md:block">·</span>
               <span className="text-slate-400 text-sm">{currentSlide + 1} / {slides.length}</span>
+              {isAdmin && isPresenterModeEnabled && (
+                <>
+                  <span className="text-slate-600 hidden md:block">·</span>
+                  <span className="text-slate-400 text-sm hidden md:block">Timer</span>
+                  <span className={`font-semibold tabular-nums text-sm ${timerPaused ? 'text-amber-400' : 'text-slate-200'}`}>
+                    {elapsedMinutes}:{elapsedRemainderSeconds.toString().padStart(2, '0')}
+                  </span>
+                  <button
+                    onClick={toggleTimerPause}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                      timerPaused
+                        ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                        : 'bg-amber-600 hover:bg-amber-500 text-white'
+                    }`}
+                    title={timerPaused ? '繼續計時' : '暫停計時'}
+                  >
+                    {timerPaused ? '▶ 繼續' : '⏸ 暫停'}
+                  </button>
+                </>
+              )}
               {isAdmin && !isPresenterModeEnabled && (
                 <button
                   onClick={() => setShowNotes(!showNotes)}
@@ -1283,15 +1460,55 @@ function App() {
                 </button>
               )}
               {isAdmin && isPresenterModeEnabled && (
-                <span className={`text-xs px-2 py-1 rounded border ${
-                  presenterSyncStatus === 'connected'
-                    ? 'text-emerald-300 border-emerald-700/70 bg-emerald-900/40'
-                    : presenterSyncStatus === 'unsupported'
-                    ? 'text-red-300 border-red-700/70 bg-red-900/40'
-                    : 'text-amber-300 border-amber-700/70 bg-amber-900/40'
-                }`}>
-                  {presenterStatusLabel}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className={`text-xs px-2 py-1 rounded border ${
+                    presenterSyncStatus === 'connected'
+                      ? 'text-emerald-300 border-emerald-700/70 bg-emerald-900/40'
+                      : presenterSyncStatus === 'unsupported'
+                      ? 'text-red-300 border-red-700/70 bg-red-900/40'
+                      : 'text-amber-300 border-amber-700/70 bg-amber-900/40'
+                  }`}>
+                    {presenterStatusLabel}
+                  </span>
+                  <span className={`text-xs px-2 py-1 rounded border ${
+                    syncCapability === 'cross-browser'
+                      ? 'text-sky-300 border-sky-700/70 bg-sky-900/40'
+                      : syncCapability === 'same-browser'
+                      ? 'text-slate-300 border-slate-700/70 bg-slate-900/40'
+                      : 'text-red-300 border-red-700/70 bg-red-900/40'
+                  }`}>
+                    {presenterTransportLabel}
+                  </span>
+                  {syncCapability === 'cross-browser' && (
+                    <button
+                      onClick={() => {
+                        void copyAudienceUrl()
+                      }}
+                      className={`px-3 py-1.5 rounded-lg text-xs border transition-colors ${
+                        copyAudienceUrlState === 'copied'
+                          ? 'border-emerald-700/70 bg-emerald-900/40 text-emerald-200'
+                          : copyAudienceUrlState === 'error'
+                          ? 'border-red-700/70 bg-red-900/40 text-red-200'
+                          : 'border-sky-700/70 bg-sky-900/40 text-sky-200 hover:bg-sky-800/50'
+                      }`}
+                      title="Copy a read-only audience URL for other browsers"
+                    >
+                      {copyAudienceUrlState === 'copied'
+                        ? 'Audience URL copied'
+                        : copyAudienceUrlState === 'error'
+                        ? 'Copy failed'
+                        : 'Copy audience URL'}
+                    </button>
+                  )}
+                  {presenterSyncStatus === 'disconnected' && (
+                    <button
+                      onClick={reopenAudienceWindow}
+                      className="px-3 py-1.5 rounded-lg text-xs border border-amber-700/70 bg-amber-900/40 text-amber-200 hover:bg-amber-800/50 transition-colors"
+                    >
+                      Reopen audience
+                    </button>
+                  )}
+                </div>
               )}
             </div>
 
