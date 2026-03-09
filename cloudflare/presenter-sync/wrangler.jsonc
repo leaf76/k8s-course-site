@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "k8s-course-site-presenter-sync",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-03-09",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "PRESENTATION_ROOM",
+        "class_name": "PresentationRoomDurableObject"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": [
+        "PresentationRoomDurableObject"
+      ]
+    }
+  ]
+}
