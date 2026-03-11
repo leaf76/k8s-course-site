@@ -180,16 +180,27 @@ docker run hello-world
 
 ## 五、Podman 簡介（5 分鐘）
 
-Red Hat 推出的容器引擎，指令跟 Docker 幾乎一樣。
+- Docker 和 Podman 都能跑 OCI 容器，日常指令非常接近
+- 核心差異：Docker 走 `Client -> dockerd`；Podman 是 daemonless，且更常搭配 rootless 使用
+- Docker 生態和教材更完整；Podman 在 RHEL / Fedora 與 systemd 管理場景更自然
 
-最大差別：**沒有 Daemon**（daemonless）
+### 架構與安全
 
-好處：
-- 安全性更高（不需 root daemon）
-- 省資源（無背景程序）
-- systemd 整合更好
+- Docker 依賴背景中的 `dockerd` 服務來管理容器
+- Podman 沒有常駐 daemon，命令會直接呼叫底層 runtime
+- Podman 較容易以一般使用者執行，安全邊界更單純
 
-RHEL/CentOS/Fedora 預設使用 Podman。本課程以 Docker 為主。
+### 生態與相容性
+
+- 多數 `docker` 指令都能直接對應成 `podman`
+- Docker 在 Compose、教學資源、社群範例上更成熟
+- Podman 同樣遵守 OCI 標準，和現代 Linux 容器工具鏈整合良好
+
+### 適用場景
+
+- 教學、跨平台開發、社群文件查找：Docker 通常更方便
+- RHEL / Fedora、systemd 服務管理、偏好 rootless：Podman 更自然
+- 本課程仍以 Docker 為主，但實務上遇到 Podman 不會陌生
 
 ---
 

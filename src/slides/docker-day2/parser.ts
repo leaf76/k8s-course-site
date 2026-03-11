@@ -4,9 +4,14 @@ export interface HourMeta {
   lectureMinutes: number
 }
 
+export interface BulletGroup {
+  label?: string
+  items: string[]
+}
+
 export interface SlideCardSpec {
   title: string
-  bullets: string[]
+  bullets: BulletGroup[]
 }
 
 export interface SlideSpec {
@@ -17,7 +22,7 @@ export interface SlideSpec {
   subtitle: string
   section: string
   duration: string
-  summary: string[]
+  summary: BulletGroup[]
   cards: SlideCardSpec[]
   code?: string
   notes: string
@@ -33,6 +38,12 @@ interface MarkdownSection {
 interface MarkdownSubSection {
   title: string
   body: string
+}
+
+interface MarkdownChunk {
+  title: string
+  body: string
+  isIntro: boolean
 }
 
 const IGNORE_SECTION_TITLES = new Set([
@@ -136,6 +147,47 @@ function extractLevelThreeSections(markdown: string): MarkdownSubSection[] {
   return sections
 }
 
+function pushChunk(
+  chunks: MarkdownChunk[],
+  title: string,
+  buffer: string[],
+  isIntro: boolean,
+) {
+  const body = buffer.join('\n').trim()
+  if (!body) {
+    return
+  }
+
+  chunks.push({
+    title: normalizeSectionTitle(title),
+    body,
+    isIntro,
+  })
+}
+
+function extractStepChunks(markdown: string, parentTitle: string): MarkdownChunk[] {
+  const chunks: MarkdownChunk[] = []
+  const lines = markdown.replace(/\r/g, '').split('\n')
+  let currentTitle = parentTitle
+  let currentIsIntro = true
+  let buffer: string[] = []
+
+  for (const line of lines) {
+    if (line.startsWith('### ')) {
+      pushChunk(chunks, currentTitle, buffer, currentIsIntro)
+      currentTitle = line.slice(4).trim()
+      currentIsIntro = false
+      buffer = []
+      continue
+    }
+
+    buffer.push(line)
+  }
+
+  pushChunk(chunks, currentTitle, buffer, currentIsIntro)
+  return chunks
+}
+
 function cleanTableRow(line: string): string {
   return line
     .replace(/^\|/, '')
@@ -146,8 +198,116 @@ function cleanTableRow(line: string): string {
     .join(' / ')
 }
 
-function collectKeyLines(markdown: string, limit: number): string[] {
-  const results: string[] = []
+function isMarkdownThematicBreak(line: string): boolean {
+  const normalized = line.trim()
+  return /^(?:-{3,}|\*{3,}|_{3,}|(?:-\s+){2,}-?|(?:\*\s+){2,}\*?|(?:_\s+){2,}_?)$/.test(normalized)
+}
+
+function normalizeSummaryLine(line: string): string {
+  let normalized = line.trim()
+
+  if (/^[-*+]\s+/.test(normalized)) {
+    normalized = normalized.replace(/^[-*+]\s+/, '')
+  } else if (/^\d+\.\s+/.test(normalized)) {
+    normalized = normalized.replace(/^\d+\.\s+/, '')
+  } else if (normalized.startsWith('|')) {
+    normalized = cleanTableRow(normalized)
+  }
+
+  return normalized
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .trim()
+}
+
+function isMarkdownListItem(line: string): boolean {
+  return /^[-*+]\s+/.test(line) || /^\d+\.\s+/.test(line)
+}
+
+function collectGroupedKeyLines(markdown: string, limit: number): BulletGroup[] {
+  const results: BulletGroup[] = []
+  const lines = markdown.replace(/\r/g, '').split('\n')
+  let inCodeBlock = false
+  let itemCount = 0
+
+  for (let index = 0; index < lines.length && itemCount < limit; index += 1) {
+    const line = lines[index].trim()
+
+    if (line.startsWith('```')) {
+      inCodeBlock = !inCodeBlock
+      continue
+    }
+
+    if (
+      inCodeBlock
+      || !line
+      || isMarkdownThematicBreak(line)
+      || line.startsWith('## ')
+      || line.startsWith('### ')
+      || /^\|(?:\s*[-:]+\s*\|)+$/.test(line)
+      || !/[：:]$/.test(line)
+    ) {
+      continue
+    }
+
+    const label = normalizeSummaryLine(line)
+    if (!label) {
+      continue
+    }
+
+    let nextIndex = index + 1
+    while (nextIndex < lines.length && !lines[nextIndex].trim()) {
+      nextIndex += 1
+    }
+
+    if (nextIndex >= lines.length || !isMarkdownListItem(lines[nextIndex].trim())) {
+      continue
+    }
+
+    let lastConsumedIndex = index
+    const items: string[] = []
+
+    while (nextIndex < lines.length && itemCount < limit) {
+      const childLine = lines[nextIndex].trim()
+
+      if (!childLine) {
+        nextIndex += 1
+        continue
+      }
+
+      if (isMarkdownThematicBreak(childLine)) {
+        nextIndex += 1
+        continue
+      }
+
+      if (!isMarkdownListItem(childLine)) {
+        break
+      }
+
+      const child = normalizeSummaryLine(childLine)
+      if (child) {
+        items.push(child)
+        itemCount += 1
+      }
+
+      lastConsumedIndex = nextIndex
+      nextIndex += 1
+    }
+
+    if (items.length > 0) {
+      results.push({ label, items })
+    }
+
+    index = lastConsumedIndex
+  }
+
+  return results
+}
+
+function collectPlainKeyLines(markdown: string, limit: number): BulletGroup[] {
+  const items: string[] = []
   const lines = markdown.replace(/\r/g, '').split('\n')
   let inCodeBlock = false
 
@@ -159,7 +319,13 @@ function collectKeyLines(markdown: string, limit: number): string[] {
       continue
     }
 
-    if (inCodeBlock || !line || line.startsWith('## ') || line.startsWith('### ')) {
+    if (
+      inCodeBlock
+      || !line
+      || isMarkdownThematicBreak(line)
+      || line.startsWith('## ')
+      || line.startsWith('### ')
+    ) {
       continue
     }
 
@@ -167,39 +333,268 @@ function collectKeyLines(markdown: string, limit: number): string[] {
       continue
     }
 
-    let normalized = line
-
-    if (/^[-*+]\s+/.test(line)) {
-      normalized = line.replace(/^[-*+]\s+/, '')
-    } else if (/^\d+\.\s+/.test(line)) {
-      normalized = line.replace(/^\d+\.\s+/, '')
-    } else if (line.startsWith('|')) {
-      normalized = cleanTableRow(line)
-    }
-
-    normalized = normalized
-      .replace(/`([^`]+)`/g, '$1')
-      .replace(/\*\*([^*]+)\*\*/g, '$1')
-      .replace(/\*([^*]+)\*/g, '$1')
-      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-      .trim()
-
+    const normalized = normalizeSummaryLine(line)
     if (!normalized) {
       continue
     }
 
-    results.push(normalized)
-    if (results.length >= limit) {
+    items.push(normalized)
+    if (items.length >= limit) {
       break
+    }
+  }
+
+  return items.length > 0 ? [{ items }] : []
+}
+
+function collectKeyLines(markdown: string, limit: number): BulletGroup[] {
+  const groupedResults = collectGroupedKeyLines(markdown, limit)
+  if (groupedResults.length > 0) {
+    return groupedResults
+  }
+
+  return collectPlainKeyLines(markdown, limit)
+}
+
+function extractCodeBlocks(markdown: string): string[] {
+  return [...markdown.matchAll(/```(?:[\w-]+)?\n([\s\S]*?)```/g)]
+    .map((match) => match[1].trim())
+    .filter(Boolean)
+}
+
+function extractFirstCodeBlock(markdown: string): string | undefined {
+  return extractCodeBlocks(markdown)[0]
+}
+
+function extractCodeCommentLines(markdown: string, limit: number): string[] {
+  const results: string[] = []
+
+  for (const block of extractCodeBlocks(markdown)) {
+    for (const rawLine of block.split('\n')) {
+      const line = rawLine.trim()
+      if (!line.startsWith('#')) {
+        continue
+      }
+
+      const normalized = line.replace(/^#+\s*/, '').trim()
+      if (!normalized || normalized === 'EOF') {
+        continue
+      }
+
+      results.push(normalized)
+      if (results.length >= limit) {
+        return results
+      }
     }
   }
 
   return results
 }
 
-function extractFirstCodeBlock(markdown: string): string | undefined {
-  const match = markdown.match(/```(?:[\w-]+)?\n([\s\S]*?)```/)
-  return match?.[1].trim()
+function getCommandSignature(line: string): string | undefined {
+  const normalized = line.trim().replace(/\s+#.*$/, '')
+  if (!normalized || normalized === 'EOF' || normalized === "'EOF'" || normalized === '"EOF"') {
+    return undefined
+  }
+
+  if (/^[<>{[(]/.test(normalized) || normalized.startsWith('-')) {
+    return undefined
+  }
+
+  const tokens = normalized.split(/\s+/)
+  if (tokens.length === 0) {
+    return undefined
+  }
+
+  const first = tokens[0]
+  if (!/^[A-Za-z0-9_./:-]+$/.test(first)) {
+    return undefined
+  }
+
+  const second = tokens[1]
+  if (second && !second.startsWith('-') && /^[A-Za-z0-9_./:-]+$/.test(second)) {
+    return `${first} ${second}`
+  }
+
+  return first
+}
+
+function extractCommandSummaryLines(markdown: string, limit: number): string[] {
+  const uniqueSignatures = new Set<string>()
+  const summaries: string[] = []
+
+  for (const block of extractCodeBlocks(markdown)) {
+    let continuingCommand = false
+
+    for (const rawLine of block.split('\n')) {
+      const line = rawLine.trim()
+      if (!line || line.startsWith('#')) {
+        continue
+      }
+
+      if (continuingCommand) {
+        continuingCommand = line.endsWith('\\')
+        continue
+      }
+
+      const signature = getCommandSignature(line)
+      if (!signature || uniqueSignatures.has(signature)) {
+        continuingCommand = line.endsWith('\\')
+        continue
+      }
+
+      uniqueSignatures.add(signature)
+      summaries.push(`操作指令：${signature}`)
+      continuingCommand = line.endsWith('\\')
+      if (summaries.length >= limit) {
+        return summaries
+      }
+    }
+  }
+
+  return summaries
+}
+
+function extractCodeSnippetSummaryLines(markdown: string, limit: number): string[] {
+  const results: string[] = []
+  const seen = new Set<string>()
+
+  for (const block of extractCodeBlocks(markdown)) {
+    for (const rawLine of block.split('\n')) {
+      const line = rawLine.trim()
+      if (!line || line.startsWith('#')) {
+        continue
+      }
+
+      if (line === 'EOF' || line === "'EOF'" || line === '"EOF"') {
+        continue
+      }
+
+      if (seen.has(line)) {
+        continue
+      }
+
+      seen.add(line)
+      results.push(line)
+      if (results.length >= limit) {
+        return results
+      }
+    }
+  }
+
+  return results
+}
+
+function deriveChunkSummary(markdown: string, limit: number): BulletGroup[] {
+  const summary = collectKeyLines(markdown, limit)
+  if (summary.length > 0) {
+    return summary
+  }
+
+  const comments = extractCodeCommentLines(markdown, limit)
+  if (comments.length > 0) {
+    return [{ items: comments }]
+  }
+
+  const commands = extractCommandSummaryLines(markdown, limit)
+  if (commands.length > 0) {
+    return [{ items: commands }]
+  }
+
+  const snippets = extractCodeSnippetSummaryLines(markdown, limit)
+  return snippets.length > 0 ? [{ items: snippets }] : []
+}
+
+function isCodeHeavySection(summary: BulletGroup[], cards: SlideCardSpec[], markdown: string): boolean {
+  return summary.length === 0 && cards.length === 0 && extractCodeBlocks(markdown).length > 0
+}
+
+function allocateChunkDurations(targetTotal: number, count: number): number[] {
+  if (count <= 0) {
+    return []
+  }
+
+  const safeTotal = Math.max(targetTotal, 0)
+  const base = Math.floor(safeTotal / count)
+  const remainder = safeTotal % count
+
+  return Array.from({ length: count }, (_unused, index) => base + (index < remainder ? 1 : 0))
+}
+
+function normalizeChunkMatchTitle(value: string): string {
+  return normalizeSectionTitle(value)
+    .replace(/[（(].*?[)）]/gu, '')
+    .replace(/[：:]/g, '')
+    .replace(/\s+/g, '')
+    .trim()
+}
+
+function extractChunkCommandSignatures(markdown: string): Set<string> {
+  return new Set(
+    extractCommandSummaryLines(markdown, Number.MAX_SAFE_INTEGER)
+      .map((summary) => summary.replace(/^操作指令：/, '')),
+  )
+}
+
+function getRelativePosition(index: number, count: number): number {
+  if (count <= 1) {
+    return 0
+  }
+
+  return index / (count - 1)
+}
+
+function alignChunkNotes(outlineChunks: MarkdownChunk[], fullChunks: MarkdownChunk[]): string[] {
+  if (fullChunks.length === 0) {
+    return outlineChunks.map((chunk) => chunk.body)
+  }
+
+  const groupedBodies = outlineChunks.map(() => [] as string[])
+  const outlineSignatures = outlineChunks.map((chunk) => extractChunkCommandSignatures(chunk.body))
+  const outlineTitles = outlineChunks.map((chunk) => normalizeChunkMatchTitle(chunk.title))
+
+  fullChunks.forEach((fullChunk, fullIndex) => {
+    const fullTitle = normalizeChunkMatchTitle(fullChunk.title)
+    const fullSignatures = extractChunkCommandSignatures(fullChunk.body)
+    let bestIndex = 0
+    let bestScore = Number.NEGATIVE_INFINITY
+
+    outlineChunks.forEach((outlineChunk, outlineIndex) => {
+      let score = 0
+      const outlineTitle = outlineTitles[outlineIndex]
+
+      if (fullChunk.isIntro === outlineChunk.isIntro) {
+        score += 2
+      }
+
+      if (fullTitle && outlineTitle) {
+        if (fullTitle === outlineTitle) {
+          score += 8
+        } else if (fullTitle.includes(outlineTitle) || outlineTitle.includes(fullTitle)) {
+          score += 4
+        }
+      }
+
+      const overlap = [...fullSignatures].filter((signature) => outlineSignatures[outlineIndex].has(signature)).length
+      score += overlap * 3
+
+      const positionPenalty = Math.abs(
+        getRelativePosition(fullIndex, fullChunks.length) - getRelativePosition(outlineIndex, outlineChunks.length),
+      )
+      score -= positionPenalty
+
+      if (score > bestScore) {
+        bestScore = score
+        bestIndex = outlineIndex
+      }
+    })
+
+    groupedBodies[bestIndex].push(fullChunk.body)
+  })
+
+  return groupedBodies.map((bodies, index) => (
+    bodies.length > 0 ? bodies.join('\n\n') : outlineChunks[index].body
+  ))
 }
 
 function cleanNotes(markdown: string): string {
@@ -213,6 +608,7 @@ function cleanNotes(markdown: string): string {
     .replace(/\*([^*]+)\*/g, '$1')
     .replace(/^\s*[-*+]\s+/gm, '• ')
     .replace(/^\s*\d+\.\s+/gm, '• ')
+    .replace(/^(?:-{3,}|\*{3,}|_{3,}|(?:-\s+){2,}-?|(?:\*\s+){2,}\*?|(?:_\s+){2,}_?)$/gm, '')
     .replace(/^\|(?:\s*[-:]+\s*\|)+$/gm, '')
     .replace(/^\|(.+)\|$/gm, (_match, row: string) => row
       .split('|')
@@ -317,6 +713,34 @@ export function buildDockerDay2SlideSpecs(
       const subtitlePrefix = sourceDay === 2
         ? `Day 2 ${phase === 'morning' ? '上午' : '下午'}`
         : 'Day 3 擴充'
+      const sectionDuration = normalizedDurations[index] ?? 1
+
+      if (isCodeHeavySection(summary, cards, section.body)) {
+        const outlineChunks = extractStepChunks(section.body, section.title)
+        const fullChunks = matchingFullSection
+          ? extractStepChunks(matchingFullSection.body, matchingFullSection.title)
+          : []
+        const alignedNotes = alignChunkNotes(outlineChunks, fullChunks)
+        const chunkDurations = allocateChunkDurations(sectionDuration, outlineChunks.length)
+
+        outlineChunks.forEach((chunk, chunkIndex) => {
+          specs.push({
+            hour,
+            hourTitle: hourMeta.title,
+            phase,
+            title: chunk.isIntro ? section.title : chunk.title,
+            subtitle: `${subtitlePrefix} · Hour ${hour} · ${section.title}`,
+            section: `Hour ${hour}｜${hourMeta.title}`,
+            duration: String(chunkDurations[chunkIndex] ?? 0),
+            summary: deriveChunkSummary(chunk.body, 3),
+            cards: [],
+            code: extractFirstCodeBlock(chunk.body),
+            notes: cleanNotes(alignedNotes[chunkIndex] ?? chunk.body),
+          })
+        })
+
+        return
+      }
 
       specs.push({
         hour,
@@ -325,7 +749,7 @@ export function buildDockerDay2SlideSpecs(
         title: section.title,
         subtitle: `${subtitlePrefix} · Hour ${hour}`,
         section: `Hour ${hour}｜${hourMeta.title}`,
-        duration: String(normalizedDurations[index] ?? 1),
+        duration: String(sectionDuration),
         summary,
         cards,
         code: extractFirstCodeBlock(section.body),

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { buildDockerDay2SlideSpecs } from './parser'
+import type { BulletGroup, SlideCardSpec } from './parser'
 
 export interface Slide {
   title: string
@@ -29,7 +30,37 @@ const documents = Object.fromEntries(
 
 const slideSpecs = buildDockerDay2SlideSpecs(documents)
 
-function renderSummary(summary: string[]) {
+function renderBulletGroups(groups: BulletGroup[], itemClassName: string) {
+  if (groups.length === 0) {
+    return null
+  }
+
+  return (
+    <div className="space-y-4">
+      {groups.map((group, groupIndex) => (
+        <div key={`${group.label ?? 'group'}-${groupIndex}`} className="space-y-2">
+          {group.label && (
+            <p className="text-slate-100 font-medium leading-relaxed">
+              {group.label}
+            </p>
+          )}
+          <ul className="space-y-2">
+            {group.items.map((item, itemIndex) => (
+              <li
+                key={`${group.label ?? 'group'}-${groupIndex}-${itemIndex}`}
+                className={itemClassName}
+              >
+                • {item}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function renderSummary(summary: BulletGroup[]) {
   if (summary.length === 0) {
     return null
   }
@@ -37,18 +68,12 @@ function renderSummary(summary: string[]) {
   return (
     <div className="bg-slate-800/55 border border-slate-700 rounded-xl p-4">
       <p className="text-blue-400 font-semibold mb-3">本段重點</p>
-      <ul className="space-y-2">
-        {summary.map((item) => (
-          <li key={item} className="text-slate-200 leading-relaxed">
-            • {item}
-          </li>
-        ))}
-      </ul>
+      {renderBulletGroups(summary, 'text-slate-200 leading-relaxed')}
     </div>
   )
 }
 
-function renderCards(cards: { title: string; bullets: string[] }[]) {
+function renderCards(cards: SlideCardSpec[]) {
   if (cards.length === 0) {
     return null
   }
@@ -58,13 +83,7 @@ function renderCards(cards: { title: string; bullets: string[] }[]) {
       {cards.map((card) => (
         <div key={card.title} className="bg-slate-800/45 border border-slate-700 rounded-xl p-4">
           <p className="text-blue-300 font-semibold mb-3">{card.title}</p>
-          <ul className="space-y-2">
-            {card.bullets.map((bullet) => (
-              <li key={`${card.title}-${bullet}`} className="text-slate-200 text-lg leading-relaxed">
-                • {bullet}
-              </li>
-            ))}
-          </ul>
+          {renderBulletGroups(card.bullets, 'text-slate-200 text-lg leading-relaxed')}
         </div>
       ))}
     </div>
@@ -80,20 +99,22 @@ function renderFallback() {
 }
 
 function buildSlide(spec: (typeof slideSpecs)[number]): Slide {
+  const shouldRenderFallback = spec.summary.length === 0 && spec.cards.length === 0 && !spec.code
+
   return {
-  title: spec.title,
-  subtitle: `${spec.subtitle} · ${spec.hourTitle}`,
-  section: spec.section,
-  duration: spec.duration,
-  code: spec.code,
-  notes: spec.notes,
-  content: (
-    <div className="space-y-5">
-      {renderSummary(spec.summary)}
-      {renderCards(spec.cards)}
-      {spec.summary.length === 0 && spec.cards.length === 0 ? renderFallback() : null}
-    </div>
-  ),
+    title: spec.title,
+    subtitle: `${spec.subtitle} · ${spec.hourTitle}`,
+    section: spec.section,
+    duration: spec.duration,
+    code: spec.code,
+    notes: spec.notes,
+    content: (
+      <div className="space-y-5">
+        {renderSummary(spec.summary)}
+        {renderCards(spec.cards)}
+        {shouldRenderFallback ? renderFallback() : null}
+      </div>
+    ),
   }
 }
 
