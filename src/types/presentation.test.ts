@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildAudienceViewUrl,
   canAudienceControlPresenter,
   createPresentationMessage,
   isFreshPresentationMessage,
@@ -31,6 +32,25 @@ describe('presentation helpers', () => {
 
     expect(parseControlToken('?control=demo-control')).toBe('demo-control')
     expect(parseControlToken('?control=   ')).toBeNull()
+  })
+
+  it('builds read-only and control audience URLs with the expected query parameters', () => {
+    expect(
+      buildAudienceViewUrl(
+        'https://example.com/k8s-course-site/admin?view=presenter&session=current#lesson1-morning',
+        'demo-session',
+        'lesson2-afternoon',
+      ),
+    ).toBe('https://example.com/k8s-course-site/admin?view=audience&session=demo-session#lesson2-afternoon')
+
+    expect(
+      buildAudienceViewUrl(
+        'https://example.com/k8s-course-site/admin',
+        'demo-session',
+        'lesson2-afternoon',
+        { accessMode: 'control', controlToken: 'demo-control' },
+      ),
+    ).toBe('https://example.com/k8s-course-site/admin?view=audience&session=demo-session&control=demo-control#lesson2-afternoon')
   })
 
   it('only enables audience control when audience mode has both session and control token', () => {

@@ -1,5 +1,6 @@
 export type ViewMode = 'presenter' | 'audience' | 'single'
 export type PresentationSenderRole = 'presenter' | 'audience'
+export type AudienceLinkAccessMode = 'read-only' | 'control'
 export const MAX_PRESENTATION_MESSAGE_AGE_MS = 30_000
 export const MAX_PRESENTATION_MESSAGE_FUTURE_SKEW_MS = 10_000
 
@@ -54,6 +55,26 @@ export function parseControlToken(search: string): string | null {
 
   const controlToken = raw.trim()
   return controlToken.length > 0 ? controlToken : null
+}
+
+export function buildAudienceViewUrl(
+  currentUrl: string,
+  sessionId: string,
+  lessonId: string,
+  options?: { accessMode?: AudienceLinkAccessMode, controlToken?: string | null },
+): string {
+  const url = new URL(currentUrl)
+  url.searchParams.set('view', 'audience')
+  url.searchParams.set('session', sessionId)
+
+  if (options?.accessMode === 'control' && options.controlToken) {
+    url.searchParams.set('control', options.controlToken)
+  } else {
+    url.searchParams.delete('control')
+  }
+
+  url.hash = lessonId
+  return url.toString()
 }
 
 export function buildPresentationChannelName(sessionId: string): string {

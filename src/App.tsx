@@ -4,6 +4,7 @@ import type { Slide } from './slides/lesson1-morning/index'
 import AudienceView from './components/AudienceView'
 import { usePresentationChannel } from './hooks/usePresentationChannel'
 import {
+  buildAudienceViewUrl,
   canAudienceControlPresenter,
   createPresentationMessage,
   isPresenterBroadcastMessage,
@@ -11,6 +12,7 @@ import {
   parseSessionId,
   parseViewMode,
   shouldAcceptAudienceControlMessage,
+  type AudienceLinkAccessMode,
   type ViewMode,
 } from './types/presentation'
 import {
@@ -194,17 +196,12 @@ function createSessionId(): string {
   return `session-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
-function buildAudienceUrl(sessionId: string, lessonId: string, controlToken?: string | null): string {
-  const url = new URL(window.location.href)
-  url.searchParams.set('view', 'audience')
-  url.searchParams.set('session', sessionId)
-  if (controlToken) {
-    url.searchParams.set('control', controlToken)
-  } else {
-    url.searchParams.delete('control')
-  }
-  url.hash = lessonId
-  return url.toString()
+function buildAudienceUrl(
+  sessionId: string,
+  lessonId: string,
+  options?: { accessMode?: AudienceLinkAccessMode, controlToken?: string | null },
+): string {
+  return buildAudienceViewUrl(window.location.href, sessionId, lessonId, options)
 }
 
 function buildPresenterControlStorageKey(sessionId: string): string {
@@ -305,6 +302,9 @@ function App() {
   const [presenterError, setPresenterError] = useState<string | null>(null)
   const [manualAudienceUrl, setManualAudienceUrl] = useState<string | null>(null)
   const [copyAudienceUrlState, setCopyAudienceUrlState] = useState<'idle' | 'copied' | 'error'>('idle')
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false)
+  const [sharePermissionMode, setSharePermissionMode] = useState<AudienceLinkAccessMode>('read-only')
+  const [showPresenterNotesScrollHint, setShowPresenterNotesScrollHint] = useState(false)
   const [sessionStartedAt, setSessionStartedAt] = useState<number | null>(null)
   const [clockTick, setClockTick] = useState(() => Date.now())
   const [timerPaused, setTimerPaused] = useState(false)
@@ -315,6 +315,7 @@ function App() {
   const lessonLoadRequestRef = useRef(0)
   const lastAudienceSignalAtRef = useRef<number | null>(null)
   const hasReceivedInitialSyncRef = useRef(false)
+  const presenterNotesScrollRef = useRef<HTMLDivElement | null>(null)
   const isAudienceView = viewMode === 'audience'
   const isPresenterModeEnabled = viewMode === 'presenter' && Boolean(sessionId)
   const audienceControlsEnabled = canAudienceControlPresenter(viewMode, sessionId, controlToken)
@@ -342,6 +343,21 @@ function App() {
     ensureOutlineLessonVisible(idx)
     window.location.hash = nextLesson.id
   }, [ensureOutlineLessonVisible])
+
+  const updatePresenterNotesScrollHint = useCallback(() => {
+    const notesElement = presenterNotesScrollRef.current
+
+    if (!notesElement || !isAdmin || !isPresenterModeEnabled) {
+      setShowPresenterNotesScrollHint(false)
+      return
+    }
+
+    const overflowThreshold = 8
+    const remainingScroll = notesElement.scrollHeight - notesElement.clientHeight - notesElement.scrollTop
+    const hasOverflow = notesElement.scrollHeight - notesElement.clientHeight > overflowThreshold
+
+    setShowPresenterNotesScrollHint(hasOverflow && remainingScroll > 16)
+  }, [isAdmin, isPresenterModeEnabled])
 
   const cacheLessonSections = useCallback((lessonId: string, nextSections: SectionEntry[]) => {
     setLessonSectionStates((prev) => ({
@@ -515,7 +531,10 @@ function App() {
     const activeSessionId = sessionId ?? createSessionId()
     const activeControlToken = createSessionId()
     const activeLessonId = LESSONS[currentLesson].id
-    const audienceUrl = buildAudienceUrl(activeSessionId, activeLessonId, activeControlToken)
+    const audienceUrl = buildAudienceUrl(activeSessionId, activeLessonId, {
+      accessMode: 'control',
+      controlToken: activeControlToken,
+    })
     persistPresenterControlToken(activeSessionId, activeControlToken)
 
     const openedWindow = window.open(audienceUrl, `k8s-audience-${activeSessionId}`, 'popup=yes,width=1366,height=768')
@@ -546,7 +565,10 @@ function App() {
     }
 
     const lessonId = LESSONS[currentLesson].id
-    const audienceUrl = buildAudienceUrl(sessionId, lessonId, controlToken)
+    const audienceUrl = buildAudienceUrl(sessionId, lessonId, {
+      accessMode: 'control',
+      controlToken,
+    })
     const openedWindow = window.open(audienceUrl, `k8s-audience-${sessionId}`, 'popup=yes,width=1366,height=768')
 
     if (!openedWindow) {
@@ -583,17 +605,21 @@ function App() {
     setPresenterSyncStatus('idle')
   }, [currentLesson, currentSlide, postPresentationMessage, sessionId])
 
-  const copyAudienceUrl = useCallback(async () => {
-    if (!sessionId) {
+  const copyAudienceUrl = useCallback(async (audienceUrl: string | null) => {
+    if (!audienceUrl) {
       return
     }
-
-    const audienceUrl = buildAudienceUrl(sessionId, LESSONS[currentLesson].id)
 
     try {
       await navigator.clipboard.writeText(audienceUrl)
       setCopyAudienceUrlState('copied')
-    } catch {
+    } catch (error) {
+      console.error('Failed to copy audience URL', {
+        sessionId,
+        lessonId: LESSONS[currentLesson].id,
+        audienceUrl,
+        error,
+      })
       setCopyAudienceUrlState('error')
     }
   }, [currentLesson, sessionId])
@@ -627,6 +653,7 @@ function App() {
           startPresenterMode()
         }
       } else if (e.key === 'Escape') {
+        setIsShareModalOpen(false)
         setShowMenu(false)
       }
     }
@@ -914,6 +941,49 @@ function App() {
     return () => window.clearTimeout(timer)
   }, [copyAudienceUrlState])
 
+  useEffect(() => {
+    if (isPresenterModeEnabled && syncCapability === 'cross-browser') {
+      return
+    }
+
+    setIsShareModalOpen(false)
+    setSharePermissionMode('read-only')
+  }, [isPresenterModeEnabled, syncCapability])
+
+  useEffect(() => {
+    if (!isAdmin || !isPresenterModeEnabled) {
+      setShowPresenterNotesScrollHint(false)
+      return
+    }
+
+    const notesElement = presenterNotesScrollRef.current
+    if (!notesElement) {
+      setShowPresenterNotesScrollHint(false)
+      return
+    }
+
+    const updateHint = () => {
+      updatePresenterNotesScrollHint()
+    }
+
+    const frameId = window.requestAnimationFrame(updateHint)
+    window.addEventListener('resize', updateHint)
+
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(() => {
+          updateHint()
+        })
+
+    resizeObserver?.observe(notesElement)
+
+    return () => {
+      window.cancelAnimationFrame(frameId)
+      window.removeEventListener('resize', updateHint)
+      resizeObserver?.disconnect()
+    }
+  }, [currentSlide, isAdmin, isPresenterModeEnabled, slide.notes, updatePresenterNotesScrollHint])
+
   // 解析所有投影片 notes 中的 Q&A
   const qaItems = useMemo(() => {
     const marker = '\u3010\u9810\u671f\u96e3\u641e\u5b78\u54e1\u554f\u984c'
@@ -1090,6 +1160,29 @@ function App() {
   const presenterTransportLabel = syncCapability === 'same-browser' && transportStatus === 'fallback'
     ? 'Same-browser fallback'
     : getPresentationSyncCapabilityLabel(syncCapability)
+  const canShareAudienceUrl = isPresenterModeEnabled && syncCapability === 'cross-browser'
+  const selectedShareAudienceUrl = sessionId
+    ? buildAudienceUrl(sessionId, lesson.id, {
+        accessMode: sharePermissionMode,
+        controlToken: sharePermissionMode === 'control' ? controlToken : null,
+      })
+    : null
+  const canCopySelectedShareLink = canShareAudienceUrl
+    && Boolean(selectedShareAudienceUrl)
+    && (sharePermissionMode === 'read-only' || Boolean(controlToken))
+  const shareCopyActionLabel = copyAudienceUrlState === 'copied'
+    ? 'Link Copied'
+    : copyAudienceUrlState === 'error'
+    ? 'Copy Failed'
+    : 'Copy Link'
+  const shareAudienceButtonTitle = !isPresenterModeEnabled
+    ? 'Start Presenter before opening link sharing'
+    : syncCapability !== 'cross-browser'
+    ? 'Link sharing is unavailable in the current sync mode'
+    : 'Open link sharing options'
+  const sharePermissionDescription = sharePermissionMode === 'control'
+    ? 'Anyone with this link can control presenter navigation.'
+    : 'Audience members can view slides but cannot control navigation.'
   if (isAudienceView) {
     return (
       <AudienceView
@@ -1504,6 +1597,128 @@ function App() {
           </div>
         )}
 
+        {isShareModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="share-audience-link-title"
+              className="w-full max-w-xl rounded-3xl border border-slate-700/80 bg-slate-900/95 p-6 shadow-2xl shadow-slate-950/50"
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 id="share-audience-link-title" className="text-xl font-semibold text-white">
+                    Share Audience Link
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-300">
+                    Choose how much control the recipient should have, then copy the link.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsShareModalOpen(false)}
+                  className="rounded-xl border border-slate-700/80 bg-slate-800/80 px-3 py-1.5 text-sm text-slate-300 transition-colors hover:bg-slate-700 hover:text-white"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="mt-5 grid gap-3 md:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCopyAudienceUrlState('idle')
+                    setSharePermissionMode('read-only')
+                  }}
+                  className={`rounded-2xl border px-4 py-4 text-left transition-colors ${
+                    sharePermissionMode === 'read-only'
+                      ? 'border-sky-500/70 bg-sky-900/30 text-sky-50'
+                      : 'border-slate-700/80 bg-slate-800/70 text-slate-200 hover:border-slate-500/80 hover:bg-slate-800'
+                  }`}
+                >
+                  <div className="text-sm font-semibold">Read-only Audience</div>
+                  <p className="mt-1 text-sm text-slate-300">
+                    Audience members can view slides but cannot control navigation.
+                  </p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCopyAudienceUrlState('idle')
+                    setSharePermissionMode('control')
+                  }}
+                  className={`rounded-2xl border px-4 py-4 text-left transition-colors ${
+                    sharePermissionMode === 'control'
+                      ? 'border-amber-500/70 bg-amber-900/25 text-amber-50'
+                      : 'border-slate-700/80 bg-slate-800/70 text-slate-200 hover:border-slate-500/80 hover:bg-slate-800'
+                  }`}
+                >
+                  <div className="text-sm font-semibold">Can Control Presenter</div>
+                  <p className="mt-1 text-sm text-slate-300">
+                    Anyone with this link can control presenter navigation.
+                  </p>
+                </button>
+              </div>
+
+              <div className="mt-4 rounded-2xl border border-slate-700/70 bg-slate-950/70 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      Selected Access
+                    </div>
+                    <div className="mt-1 text-sm font-medium text-white">
+                      {sharePermissionMode === 'control' ? 'Interactive control link' : 'Read-only audience link'}
+                    </div>
+                  </div>
+                  <span
+                    className={`rounded-full border px-2.5 py-1 text-xs ${
+                      sharePermissionMode === 'control'
+                        ? 'border-amber-700/70 bg-amber-900/30 text-amber-200'
+                        : 'border-sky-700/70 bg-sky-900/30 text-sky-200'
+                    }`}
+                  >
+                    {sharePermissionMode === 'control' ? 'Control enabled' : 'Read-only'}
+                  </span>
+                </div>
+                <p className="mt-3 text-sm text-slate-400">
+                  {sharePermissionDescription}
+                </p>
+                <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/90 px-3 py-3 font-mono text-xs leading-relaxed text-slate-200 break-all">
+                  {selectedShareAudienceUrl ?? 'Audience link unavailable'}
+                </div>
+              </div>
+
+              <div className="mt-5 flex flex-wrap items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsShareModalOpen(false)}
+                  className="rounded-xl border border-slate-700/80 bg-slate-800/80 px-4 py-2 text-sm font-medium text-slate-300 transition-colors hover:bg-slate-700 hover:text-white"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void copyAudienceUrl(selectedShareAudienceUrl)
+                  }}
+                  disabled={!canCopySelectedShareLink}
+                  className={`rounded-xl px-4 py-2 text-sm font-semibold transition-colors ${
+                    !canCopySelectedShareLink
+                      ? 'cursor-not-allowed bg-slate-800 text-slate-500'
+                      : copyAudienceUrlState === 'copied'
+                      ? 'bg-emerald-600 text-white hover:bg-emerald-500'
+                      : copyAudienceUrlState === 'error'
+                      ? 'bg-red-600 text-white hover:bg-red-500'
+                      : 'bg-sky-600 text-white hover:bg-sky-500'
+                  }`}
+                >
+                  {shareCopyActionLabel}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {presenterError && (
           <div className="fixed top-4 right-4 z-40 max-w-md bg-red-950/90 border border-red-700/70 text-red-100 rounded-lg p-4 shadow-xl">
             <p className="text-sm font-semibold">Presenter mode warning</p>
@@ -1523,15 +1738,19 @@ function App() {
         )}
 
         {/* Slide area */}
-        <div className="min-h-screen flex flex-col items-center justify-center p-8 text-white pb-24">
+        <div className={`text-white ${
+          isAdmin && isPresenterModeEnabled
+            ? 'w-full px-4 pt-6 pb-24 xl:h-[calc(100dvh-4.5rem)] xl:overflow-hidden xl:px-8'
+            : 'min-h-screen flex flex-col items-center justify-center p-8 pb-24'
+        }`}>
           {loading ? (
             <div className="text-center">
               <div className="text-6xl mb-4 animate-pulse">⏳</div>
               <p className="text-2xl text-slate-300">載入課程中...</p>
             </div>
           ) : isAdmin && isPresenterModeEnabled ? (
-            <div className="w-full max-w-[1800px] grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(500px,1.2fr)] gap-6" key={`${currentLesson}-${currentSlide}`}>
-              <div className="bg-slate-900/60 border border-slate-700 rounded-2xl p-6">
+            <div className="mx-auto w-full max-w-[1800px] grid grid-cols-1 gap-6 xl:h-full xl:min-h-0 xl:grid-cols-[minmax(0,1fr)_minmax(500px,1.2fr)]" key={`${currentLesson}-${currentSlide}`}>
+              <div className="bg-slate-900/60 border border-slate-700 rounded-2xl p-6 xl:min-h-0 xl:flex xl:flex-col xl:overflow-hidden">
                 <div className="flex items-center gap-2 mb-4 text-xs text-slate-500">
                   <span>{lesson.day}</span>
                   <span>›</span>
@@ -1544,38 +1763,40 @@ function App() {
                   )}
                 </div>
 
-                {slide.section && (
-                  <div className="text-blue-400 text-xl font-semibold mb-3 tracking-wider uppercase">
-                    {slide.section}
+                <div className="xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:overscroll-contain xl:pr-2">
+                  {slide.section && (
+                    <div className="text-blue-400 text-xl font-semibold mb-3 tracking-wider uppercase">
+                      {slide.section}
+                    </div>
+                  )}
+
+                  <h1 className="text-5xl 2xl:text-6xl font-bold mb-6 leading-tight text-white">
+                    {slide.title}
+                  </h1>
+
+                  {slide.subtitle && (
+                    <h2 className="text-2xl 2xl:text-3xl text-slate-300 mb-8">
+                      {slide.subtitle}
+                    </h2>
+                  )}
+
+                  <div className="text-xl 2xl:text-2xl text-slate-200 space-y-5
+                    [&_p]:text-xl [&_li]:text-xl [&_span]:text-xl
+                    [&_code]:text-lg [&_pre]:text-lg
+                    [&_.text-xs]:!text-base [&_.text-sm]:!text-lg [&_.text-base]:!text-xl">
+                    {slide.content}
                   </div>
-                )}
 
-                <h1 className="text-5xl 2xl:text-6xl font-bold mb-6 leading-tight text-white">
-                  {slide.title}
-                </h1>
-
-                {slide.subtitle && (
-                  <h2 className="text-2xl 2xl:text-3xl text-slate-300 mb-8">
-                    {slide.subtitle}
-                  </h2>
-                )}
-
-                <div className="text-xl 2xl:text-2xl text-slate-200 space-y-5
-                  [&_p]:text-xl [&_li]:text-xl [&_span]:text-xl
-                  [&_code]:text-lg [&_pre]:text-lg
-                  [&_.text-xs]:!text-base [&_.text-sm]:!text-lg [&_.text-base]:!text-xl">
-                  {slide.content}
+                  {slide.code && (
+                    <pre className="mt-8 bg-slate-900/80 p-6 rounded-xl overflow-x-auto text-lg border border-slate-700 shadow-inner">
+                      <code className="text-green-400 font-mono">{slide.code}</code>
+                    </pre>
+                  )}
                 </div>
-
-                {slide.code && (
-                  <pre className="mt-8 bg-slate-900/80 p-6 rounded-xl overflow-x-auto text-lg border border-slate-700 shadow-inner">
-                    <code className="text-green-400 font-mono">{slide.code}</code>
-                  </pre>
-                )}
               </div>
 
-              <div className="space-y-4">
-                <div className="bg-slate-900/70 border border-slate-700 rounded-xl p-4">
+              <div className="space-y-4 xl:min-h-0 xl:flex xl:flex-col">
+                <div className="bg-slate-900/70 border border-slate-700 rounded-xl p-4 shrink-0">
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="text-sm uppercase tracking-wide text-slate-400">Next slide</h3>
                     <span className="text-xs text-slate-500">
@@ -1597,16 +1818,28 @@ function App() {
                   )}
                 </div>
 
-                <div className="bg-black/70 border border-slate-700 rounded-xl p-6 flex-1 min-h-[500px] flex flex-col">
+                <div className="relative bg-black/70 border border-slate-700 rounded-xl p-6 flex-1 min-h-[500px] flex flex-col xl:min-h-0 xl:overflow-hidden">
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-lg uppercase tracking-wide text-blue-400 font-semibold">📝 演講稿</h3>
                     <span className="text-sm text-slate-400">
                       ⏱ {slide.duration || '2-3'} min · {(slide.notes || '').length} 字
                     </span>
                   </div>
-                  <div className="text-xl text-slate-100 whitespace-pre-line leading-relaxed overflow-y-auto pr-2 flex-1">
+                  <div
+                    ref={presenterNotesScrollRef}
+                    onScroll={updatePresenterNotesScrollHint}
+                    className="text-xl text-slate-100 whitespace-pre-line leading-relaxed overflow-y-auto pr-2 flex-1 min-h-0 overscroll-contain"
+                  >
                     {slide.notes?.trim() ? slide.notes : 'No notes for this slide yet.'}
                   </div>
+                  {showPresenterNotesScrollHint && (
+                    <div className="pointer-events-none absolute inset-x-6 bottom-6 rounded-b-xl bg-gradient-to-t from-black/95 via-black/70 to-transparent px-4 pb-2 pt-10 text-center">
+                      <div className="inline-flex items-center gap-2 rounded-full border border-slate-600/70 bg-slate-950/75 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200 shadow-lg shadow-slate-950/30">
+                        <span aria-hidden="true" className="text-sm leading-none">↓</span>
+                        <span>Scroll for more</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
               </div>
@@ -1701,107 +1934,115 @@ function App() {
               </button>
             </div>
 
-            <div className="flex items-center gap-3 text-center">
-              <span className="text-slate-400 text-sm hidden md:block">{lesson.label}</span>
-              <span className="text-slate-600 hidden md:block">·</span>
-              <span className="text-slate-400 text-sm">{currentSlide + 1} / {slides.length}</span>
-              {isAdmin && isPresenterModeEnabled && (
-                <>
-                  <span className="text-slate-600 hidden md:block">·</span>
-                  <span className="text-slate-400 text-sm hidden md:block">Timer</span>
-                  <span className={`font-semibold tabular-nums text-sm ${timerPaused ? 'text-amber-400' : 'text-slate-200'}`}>
-                    {elapsedMinutes}:{elapsedRemainderSeconds.toString().padStart(2, '0')}
-                  </span>
-                  <button
-                    onClick={toggleTimerPause}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                      timerPaused
-                        ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
-                        : 'bg-amber-600 hover:bg-amber-500 text-white'
-                    }`}
-                    title={timerPaused ? '繼續計時' : '暫停計時'}
-                  >
-                    {timerPaused ? '▶ 繼續' : '⏸ 暫停'}
-                  </button>
-                </>
-              )}
-              {isAdmin && !isPresenterModeEnabled && (
-                <button
-                  onClick={() => setShowNotes(!showNotes)}
-                  className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
-                    showNotes ? 'bg-blue-600 text-white' : 'bg-slate-700/80 text-slate-300 hover:bg-slate-600'
-                  }`}
-                >
-                  {showNotes ? '收起' : '演講稿'} (N)
-                </button>
-              )}
-              {isAdmin && (
-                <button
-                  onClick={() => {
-                    if (isPresenterModeEnabled) {
-                      stopPresenterMode()
-                    } else {
-                      startPresenterMode()
-                    }
-                  }}
-                  className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
-                    isPresenterModeEnabled
-                      ? 'bg-red-600/80 hover:bg-red-500 text-white'
-                      : 'bg-emerald-600/80 hover:bg-emerald-500 text-white'
-                  }`}
-                  title="Toggle presenter mode (P)"
-                >
-                  {isPresenterModeEnabled ? 'End Presenter (P)' : 'Start Presenter (P)'}
-                </button>
-              )}
-              {isAdmin && isPresenterModeEnabled && (
-                <div className="flex items-center gap-2">
-                  <span className={`text-xs px-2 py-1 rounded border ${
-                    presenterSyncStatus === 'connected'
-                      ? 'text-emerald-300 border-emerald-700/70 bg-emerald-900/40'
-                      : presenterSyncStatus === 'unsupported'
-                      ? 'text-red-300 border-red-700/70 bg-red-900/40'
-                      : 'text-amber-300 border-amber-700/70 bg-amber-900/40'
-                  }`}>
-                    {presenterStatusLabel}
-                  </span>
-                  <span className={`text-xs px-2 py-1 rounded border ${
-                    syncCapability === 'cross-browser'
-                      ? 'text-sky-300 border-sky-700/70 bg-sky-900/40'
-                      : syncCapability === 'same-browser'
-                      ? 'text-slate-300 border-slate-700/70 bg-slate-900/40'
-                      : 'text-red-300 border-red-700/70 bg-red-900/40'
-                  }`}>
-                    {presenterTransportLabel}
-                  </span>
-                  {syncCapability === 'cross-browser' && (
+            <div className="flex flex-col items-center gap-2 text-center md:items-end">
+              <div className="flex flex-wrap items-center justify-center gap-3 md:justify-end">
+                <span className="text-slate-400 text-sm hidden md:block">{lesson.label}</span>
+                <span className="text-slate-600 hidden md:block">·</span>
+                <span className="text-slate-400 text-sm">{currentSlide + 1} / {slides.length}</span>
+                {isAdmin && isPresenterModeEnabled && (
+                  <>
+                    <span className="text-slate-600 hidden md:block">·</span>
+                    <span className="text-slate-400 text-sm hidden md:block">Timer</span>
+                    <span className={`font-semibold tabular-nums text-sm ${timerPaused ? 'text-amber-400' : 'text-slate-200'}`}>
+                      {elapsedMinutes}:{elapsedRemainderSeconds.toString().padStart(2, '0')}
+                    </span>
                     <button
-                      onClick={() => {
-                        void copyAudienceUrl()
-                      }}
-                      className={`px-3 py-1.5 rounded-lg text-xs border transition-colors ${
-                        copyAudienceUrlState === 'copied'
-                          ? 'border-emerald-700/70 bg-emerald-900/40 text-emerald-200'
-                          : copyAudienceUrlState === 'error'
-                          ? 'border-red-700/70 bg-red-900/40 text-red-200'
-                          : 'border-sky-700/70 bg-sky-900/40 text-sky-200 hover:bg-sky-800/50'
+                      onClick={toggleTimerPause}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                        timerPaused
+                          ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                          : 'bg-amber-600 hover:bg-amber-500 text-white'
                       }`}
-                      title="Copy a read-only audience URL for other browsers"
+                      title={timerPaused ? '繼續計時' : '暫停計時'}
                     >
-                      {copyAudienceUrlState === 'copied'
-                        ? 'Audience URL copied'
-                        : copyAudienceUrlState === 'error'
-                        ? 'Copy failed'
-                        : 'Copy audience URL'}
+                      {timerPaused ? '▶ 繼續' : '⏸ 暫停'}
                     </button>
-                  )}
-                  {presenterSyncStatus === 'disconnected' && (
-                    <button
-                      onClick={reopenAudienceWindow}
-                      className="px-3 py-1.5 rounded-lg text-xs border border-amber-700/70 bg-amber-900/40 text-amber-200 hover:bg-amber-800/50 transition-colors"
-                    >
-                      Reopen audience
-                    </button>
+                  </>
+                )}
+              </div>
+
+              {isAdmin && (
+                <div className="flex flex-col items-center gap-2 md:items-end">
+                  <div className="flex flex-wrap items-center justify-center gap-2 md:justify-end">
+                    {!isPresenterModeEnabled && (
+                      <button
+                        onClick={() => setShowNotes(!showNotes)}
+                        className={`px-3.5 py-2 rounded-xl text-sm font-medium transition-colors ${
+                          showNotes ? 'bg-blue-600 text-white' : 'bg-slate-700/80 text-slate-300 hover:bg-slate-600'
+                        }`}
+                      >
+                        {showNotes ? 'Hide Notes' : 'Show Notes'} (N)
+                      </button>
+                    )}
+
+                    <div className="flex flex-wrap items-center justify-center gap-2 rounded-2xl border border-slate-700/70 bg-slate-900/65 p-1.5 shadow-lg shadow-slate-950/20">
+                      <button
+                        onClick={() => {
+                          if (isPresenterModeEnabled) {
+                            stopPresenterMode()
+                          } else {
+                            startPresenterMode()
+                          }
+                        }}
+                        className={`min-w-[11rem] rounded-xl px-4 py-2 text-sm font-semibold transition-colors ${
+                          isPresenterModeEnabled
+                            ? 'bg-red-600/90 text-white hover:bg-red-500'
+                            : 'bg-emerald-600/90 text-white hover:bg-emerald-500'
+                        }`}
+                        title="Toggle presenter mode (P)"
+                      >
+                        {isPresenterModeEnabled ? 'End Presenter (P)' : 'Start Presenter (P)'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCopyAudienceUrlState('idle')
+                          setSharePermissionMode('read-only')
+                          setIsShareModalOpen(true)
+                        }}
+                        disabled={!canShareAudienceUrl}
+                        aria-disabled={!canShareAudienceUrl}
+                        title={shareAudienceButtonTitle}
+                        className={`min-w-[10rem] rounded-xl border px-4 py-2 text-sm font-semibold transition-colors ${
+                          !canShareAudienceUrl
+                            ? 'cursor-not-allowed border-slate-700/80 bg-slate-800/80 text-slate-500'
+                            : 'border-sky-600/70 bg-sky-900/35 text-sky-100 hover:bg-sky-800/50'
+                        }`}
+                      >
+                        Share Link
+                      </button>
+                    </div>
+                  </div>
+
+                  {isPresenterModeEnabled && (
+                    <div className="flex flex-wrap items-center justify-center gap-2 md:justify-end">
+                      <span className={`text-xs px-2.5 py-1 rounded-full border ${
+                        presenterSyncStatus === 'connected'
+                          ? 'text-emerald-300 border-emerald-700/70 bg-emerald-900/40'
+                          : presenterSyncStatus === 'unsupported'
+                          ? 'text-red-300 border-red-700/70 bg-red-900/40'
+                          : 'text-amber-300 border-amber-700/70 bg-amber-900/40'
+                      }`}>
+                        {presenterStatusLabel}
+                      </span>
+                      <span className={`text-xs px-2.5 py-1 rounded-full border ${
+                        syncCapability === 'cross-browser'
+                          ? 'text-sky-300 border-sky-700/70 bg-sky-900/40'
+                          : syncCapability === 'same-browser'
+                          ? 'text-slate-300 border-slate-700/70 bg-slate-900/40'
+                          : 'text-red-300 border-red-700/70 bg-red-900/40'
+                      }`}>
+                        {presenterTransportLabel}
+                      </span>
+                      {presenterSyncStatus === 'disconnected' && (
+                        <button
+                          onClick={reopenAudienceWindow}
+                          className="px-3 py-1.5 rounded-full text-xs font-medium border border-amber-700/70 bg-amber-900/40 text-amber-200 hover:bg-amber-800/50 transition-colors"
+                        >
+                          Reopen Audience
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               )}
