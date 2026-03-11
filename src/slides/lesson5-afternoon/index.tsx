@@ -931,7 +931,7 @@ Kubernetes 沒有內建的「集群級別 NetworkPolicy」，但有些進階 CNI
 
 方式一，用 curl 帶 Host header：curl http://任意節點IP:NodePort -H "Host: demo.example.com"，這個方式不需要改 /etc/hosts，nginx 根據 Host header 來做路由，所以帶正確的 Host header 即可。
 
-方式二，修改本機的 /etc/hosts（Linux/Mac 在 /etc/hosts，Windows 在 C:\Windows\System32\drivers\etc\hosts），加一行 節點IP demo.example.com，然後直接 curl http://demo.example.com 或用瀏覽器打開，就像真實域名一樣完全正常的流程。
+方式二，修改本機的 /etc/hosts（Linux/Mac 在 /etc/hosts，Windows 在 C:\\Windows\\System32\\drivers\\etc\\hosts），加一行 節點IP demo.example.com，然後直接 curl http://demo.example.com 或用瀏覽器打開，就像真實域名一樣完全正常的流程。
 
 操作過程中如果遇到問題，排查步驟：kubectl describe ingress my-ingress 看 Ingress 的 Events 欄位，有問題通常在這裡有提示；kubectl logs -n ingress-nginx -l app.kubernetes.io/component=controller 看 Controller 的日誌，每個請求和路由結果都有記錄；kubectl get endpoints demo-web-svc 看後端 Pod 有沒有正確加入 Endpoints。
 

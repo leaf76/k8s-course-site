@@ -17,6 +17,13 @@ import {
   getPresentationSyncCapabilityLabel,
   isPresentationTransportActive,
 } from './types/presentationTransport'
+import {
+  buildFocusedOutlineState,
+  buildSectionKey,
+  buildSections,
+  isCurrentSection,
+  type SectionEntry,
+} from './sidebarOutline'
 
 // 課程列表
 const LESSONS = [
@@ -42,7 +49,7 @@ const LESSONS = [
   {
     id: 'lesson2-morning',
     label: '第二堂 早上',
-    title: '程式與服務管理',
+    title: 'Docker 基礎：概念、架構與安裝',
     time: '09:00–12:00',
     day: '第二天',
     getSlides: async () => {
@@ -53,7 +60,7 @@ const LESSONS = [
   {
     id: 'lesson2-afternoon',
     label: '第二堂 下午',
-    title: 'Docker 入門',
+    title: 'Docker 實作與進階：指令、Nginx、映像、生命週期、網路到 Dockerfile',
     time: '13:00–17:00',
     day: '第二天',
     getSlides: async () => {
@@ -173,33 +180,6 @@ const LESSONS = [
   },
 ]
 
-// Sidebar 章節條目
-interface SectionEntry {
-  name: string
-  firstIndex: number
-  slideCount: number
-  totalMinutes: number
-  totalExpectedChars: number
-  totalActualChars: number
-}
-
-function buildSections(slides: Slide[]): SectionEntry[] {
-  const map = new Map<string, SectionEntry>()
-  slides.forEach((slide, index) => {
-    const name = slide.section || '未分類'
-    if (!map.has(name)) {
-      map.set(name, { name, firstIndex: index, slideCount: 0, totalMinutes: 0, totalExpectedChars: 0, totalActualChars: 0 })
-    }
-    const entry = map.get(name)!
-    const dur = parseInt(slide.duration || '2')
-    entry.slideCount++
-    entry.totalMinutes += dur
-    entry.totalExpectedChars += dur * 150
-    entry.totalActualChars += (slide.notes || '').length
-  })
-  return Array.from(map.values())
-}
-
 // 從 URL hash 取得初始課程 index
 function getLessonIndexFromHash(): number {
   const hash = window.location.hash.replace('#', '')
@@ -274,7 +254,15 @@ function isAdminPath(): boolean {
   return path.includes('/admin') || redirectedPath.includes('/admin')
 }
 
+const FALLBACK_ERROR_SLIDE: Slide = {
+  title: 'Load failed',
+  subtitle: 'Unable to load lesson',
+  notes: '',
+  duration: '1',
+}
+
 function App() {
+  const initialLessonIndex = getLessonIndexFromHash()
   const [isAdmin] = useState(isAdminPath)
   const [viewMode, setViewMode] = useState<ViewMode>(() => parseViewMode(window.location.search))
   const [sessionId, setSessionId] = useState<string | null>(() => parseSessionId(window.location.search))
@@ -292,14 +280,19 @@ function App() {
 
     return null
   })
-  const [currentLesson, setCurrentLesson] = useState(getLessonIndexFromHash)
+  const [currentLesson, setCurrentLesson] = useState(initialLessonIndex)
   const [currentSlide, setCurrentSlide] = useState(0)
   const [showNotes, setShowNotes] = useState(false)
   const [showMenu, setShowMenu] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(window.innerWidth >= 768)
   const [showQA, setShowQA] = useState(false)
   const [collapsedDays, setCollapsedDays] = useState<Set<string>>(new Set())
-  const [sectionsCollapsed, setSectionsCollapsed] = useState(() => window.innerWidth < 768)
+  const [expandedLessons, setExpandedLessons] = useState<Set<string>>(() => new Set([LESSONS[initialLessonIndex].id]))
+  const [expandedSectionsByLesson, setExpandedSectionsByLesson] = useState<Record<string, Set<string>>>({})
+  const [lessonSectionStates, setLessonSectionStates] = useState<Record<string, {
+    status: 'idle' | 'loading' | 'ready' | 'error'
+    sections: SectionEntry[]
+  }>>({})
   const [slides, setSlides] = useState<Slide[]>(lesson1MorningSlides)
   const [loading, setLoading] = useState(false)
   const [presenterSyncStatus, setPresenterSyncStatus] = useState<'idle' | 'connecting' | 'connected' | 'disconnected' | 'unsupported'>('idle')
@@ -315,6 +308,8 @@ function App() {
   const [pausedElapsed, setPausedElapsed] = useState(0)
   const audienceWindowRef = useRef<Window | null>(null)
   const pendingAudienceSlideRef = useRef<number | null>(null)
+  const pendingSidebarSectionRef = useRef<{ lessonId: string; slideIndex: number } | null>(null)
+  const lessonLoadRequestRef = useRef(0)
   const lastAudienceSignalAtRef = useRef<number | null>(null)
   const hasReceivedInitialSyncRef = useRef(false)
   const isAudienceView = viewMode === 'audience'
@@ -328,10 +323,59 @@ function App() {
   const isTransportReady = isPresentationTransportActive(transportStatus)
 
   // 切換課程（同步 URL hash）
-  const switchLesson = useCallback((idx: number) => {
-    setCurrentLesson(idx)
-    window.location.hash = LESSONS[idx].id
+  const ensureOutlineLessonVisible = useCallback((idx: number) => {
+    const nextLesson = LESSONS[idx]
+    setExpandedLessons((prev) => new Set(prev).add(nextLesson.id))
+    setCollapsedDays((prev) => {
+      const next = new Set(prev)
+      next.delete(nextLesson.day)
+      return next
+    })
   }, [])
+
+  const switchLesson = useCallback((idx: number) => {
+    const nextLesson = LESSONS[idx]
+    setCurrentLesson(idx)
+    ensureOutlineLessonVisible(idx)
+    window.location.hash = nextLesson.id
+  }, [ensureOutlineLessonVisible])
+
+  const cacheLessonSections = useCallback((lessonId: string, nextSections: SectionEntry[]) => {
+    setLessonSectionStates((prev) => ({
+      ...prev,
+      [lessonId]: { status: 'ready', sections: nextSections },
+    }))
+  }, [])
+
+  const ensureLessonSectionsLoaded = useCallback(async (lessonIndex: number) => {
+    const lessonToLoad = LESSONS[lessonIndex]
+    const cachedState = lessonSectionStates[lessonToLoad.id]
+
+    if (cachedState?.status === 'loading' || cachedState?.status === 'ready') {
+      return
+    }
+
+    if (lessonIndex === currentLesson) {
+      cacheLessonSections(lessonToLoad.id, buildSections(slides))
+      return
+    }
+
+    setLessonSectionStates((prev) => ({
+      ...prev,
+      [lessonToLoad.id]: { status: 'loading', sections: prev[lessonToLoad.id]?.sections ?? [] },
+    }))
+
+    try {
+      const loadedSlides = await lessonToLoad.getSlides()
+      cacheLessonSections(lessonToLoad.id, buildSections(loadedSlides as Slide[]))
+    } catch (error) {
+      console.error('Failed to load lesson sections', { lessonId: lessonToLoad.id, error })
+      setLessonSectionStates((prev) => ({
+        ...prev,
+        [lessonToLoad.id]: { status: 'error', sections: [] },
+      }))
+    }
+  }, [cacheLessonSections, currentLesson, lessonSectionStates, slides])
 
   useEffect(() => {
     if (isAudienceView) {
@@ -360,31 +404,58 @@ function App() {
   useEffect(() => {
     const onHashChange = () => {
       const idx = getLessonIndexFromHash()
+      ensureOutlineLessonVisible(idx)
       setCurrentLesson(idx)
     }
     window.addEventListener('hashchange', onHashChange)
     return () => window.removeEventListener('hashchange', onHashChange)
-  }, [])
+  }, [ensureOutlineLessonVisible])
 
   // 載入課程
   useEffect(() => {
     const lesson = LESSONS[currentLesson]
+    const requestId = lessonLoadRequestRef.current + 1
+    lessonLoadRequestRef.current = requestId
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true)
-    if (!isAudienceView || pendingAudienceSlideRef.current === null) {
+    const pendingSidebarSection = pendingSidebarSectionRef.current
+    if ((!isAudienceView || pendingAudienceSlideRef.current === null)
+      && pendingSidebarSection?.lessonId !== lesson.id) {
       setCurrentSlide(0)
     }
-    lesson.getSlides().then((s) => {
-      const loadedSlides = s as Slide[]
-      setSlides(loadedSlides)
-      if (isAudienceView && pendingAudienceSlideRef.current !== null) {
-        const nextIndex = Math.min(Math.max(pendingAudienceSlideRef.current, 0), Math.max(loadedSlides.length - 1, 0))
-        setCurrentSlide(nextIndex)
-        pendingAudienceSlideRef.current = null
-      }
-      setLoading(false)
-    })
-  }, [currentLesson, isAudienceView])
+    lesson.getSlides()
+      .then((s) => {
+        if (lessonLoadRequestRef.current !== requestId) {
+          return
+        }
+
+        const loadedSlides = s as Slide[]
+        cacheLessonSections(lesson.id, buildSections(loadedSlides))
+        setSlides(loadedSlides)
+        if (isAudienceView && pendingAudienceSlideRef.current !== null) {
+          const nextIndex = Math.min(Math.max(pendingAudienceSlideRef.current, 0), Math.max(loadedSlides.length - 1, 0))
+          setCurrentSlide(nextIndex)
+          pendingAudienceSlideRef.current = null
+        } else if (pendingSidebarSectionRef.current?.lessonId === lesson.id) {
+          const nextIndex = Math.min(
+            Math.max(pendingSidebarSectionRef.current.slideIndex, 0),
+            Math.max(loadedSlides.length - 1, 0),
+          )
+          setCurrentSlide(nextIndex)
+          pendingSidebarSectionRef.current = null
+        }
+        setLoading(false)
+      })
+      .catch((error) => {
+        if (lessonLoadRequestRef.current !== requestId) {
+          return
+        }
+
+        console.error('Failed to load lesson slides', { lessonId: lesson.id, error })
+        setSlides([FALLBACK_ERROR_SLIDE])
+        setLoading(false)
+      })
+  }, [cacheLessonSections, currentLesson, isAudienceView])
 
   const goToSlide = useCallback((index: number) => {
     if (index >= 0 && index < slides.length) {
@@ -555,6 +626,10 @@ function App() {
   const slide: Slide = slides[currentSlide] || slides[0]
   const lesson = LESSONS[currentLesson]
   const sections = useMemo(() => buildSections(slides), [slides])
+  const lessonOutlineEntries = useMemo(
+    () => LESSONS.map(({ id, day }) => ({ id, day })),
+    [],
+  )
   const nextSlidePreview: Slide | null = slides[currentSlide + 1] || null
   const elapsedSeconds = timerPaused
     ? pausedElapsed
@@ -633,6 +708,7 @@ function App() {
       setPresenterError(null)
 
       if (syncedLessonIndex !== currentLesson) {
+        ensureOutlineLessonVisible(syncedLessonIndex)
         setCurrentLesson(syncedLessonIndex)
         window.location.hash = latestMessage.lessonId
         return
@@ -679,6 +755,7 @@ function App() {
 
     if (syncedLessonIndex !== currentLesson) {
       pendingAudienceSlideRef.current = latestMessage.slideIndex
+      ensureOutlineLessonVisible(syncedLessonIndex)
       setCurrentLesson(syncedLessonIndex)
       window.location.hash = latestMessage.lessonId
       return
@@ -694,6 +771,7 @@ function App() {
     isPresenterModeEnabled,
     latestMessage,
     lesson.id,
+    ensureOutlineLessonVisible,
     postPresentationMessage,
     slides.length,
     isTransportReady,
@@ -842,6 +920,108 @@ function App() {
 
   // 按天分組課程
   const days = Array.from(new Set(LESSONS.map(l => l.day)))
+  const currentLessonSections = lessonSectionStates[lesson.id]?.sections ?? (loading ? [] : sections)
+  const currentDay = lesson.day
+  const isOnlyCurrentLessonView = days.every((day) => day === currentDay || collapsedDays.has(day))
+    && expandedLessons.size === 1
+    && expandedLessons.has(lesson.id)
+  const activeCurrentSection = currentLessonSections.find((_section, index) => isCurrentSection(currentLessonSections, index, currentSlide))
+
+  const setExpandedSectionsForLesson = useCallback((lessonId: string, sectionKeys: string[]) => {
+    setExpandedSectionsByLesson((prev) => ({
+      ...prev,
+      [lessonId]: new Set(sectionKeys),
+    }))
+  }, [])
+
+  const focusCurrentLessonOutline = useCallback(() => {
+    const outlineState = buildFocusedOutlineState(lessonOutlineEntries, lesson.id, currentDay)
+    setCollapsedDays(outlineState.collapsedDays)
+    setExpandedLessons(outlineState.expandedLessons)
+    setExpandedSectionsForLesson(
+      lesson.id,
+      activeCurrentSection ? [buildSectionKey(activeCurrentSection)] : [],
+    )
+  }, [activeCurrentSection, currentDay, lesson.id, lessonOutlineEntries, setExpandedSectionsForLesson])
+
+  const toggleLessonExpansion = useCallback((lessonIndex: number) => {
+    const lessonToToggle = LESSONS[lessonIndex]
+    const isExpanded = expandedLessons.has(lessonToToggle.id)
+
+    setExpandedLessons((prev) => {
+      const next = new Set(prev)
+      if (next.has(lessonToToggle.id)) {
+        next.delete(lessonToToggle.id)
+      } else {
+        next.add(lessonToToggle.id)
+      }
+      return next
+    })
+
+    if (!isExpanded) {
+      void ensureLessonSectionsLoaded(lessonIndex)
+    }
+  }, [ensureLessonSectionsLoaded, expandedLessons])
+
+  const jumpToLessonSection = useCallback((lessonIndex: number, section: SectionEntry) => {
+    const targetLesson = LESSONS[lessonIndex]
+    const sectionKey = buildSectionKey(section)
+
+    setExpandedLessons((prev) => new Set(prev).add(targetLesson.id))
+    setCollapsedDays((prev) => {
+      const next = new Set(prev)
+      next.delete(targetLesson.day)
+      return next
+    })
+    setExpandedSectionsForLesson(targetLesson.id, [sectionKey])
+
+    if (lessonIndex === currentLesson) {
+      goToSlide(section.firstIndex)
+      return
+    }
+
+    pendingSidebarSectionRef.current = { lessonId: targetLesson.id, slideIndex: section.firstIndex }
+    switchLesson(lessonIndex)
+  }, [currentLesson, goToSlide, setExpandedSectionsForLesson, switchLesson])
+
+  const toggleSectionExpansion = useCallback((lessonId: string, sectionKey: string) => {
+    setExpandedSectionsByLesson((prev) => {
+      const currentKeys = prev[lessonId] ?? new Set<string>()
+      const nextKeys = new Set(currentKeys)
+
+      if (nextKeys.has(sectionKey)) {
+        nextKeys.delete(sectionKey)
+      } else {
+        nextKeys.add(sectionKey)
+      }
+
+      return {
+        ...prev,
+        [lessonId]: nextKeys,
+      }
+    })
+  }, [])
+
+  const jumpToLessonSlide = useCallback((lessonIndex: number, section: SectionEntry, slideIndex: number) => {
+    const targetLesson = LESSONS[lessonIndex]
+    const sectionKey = buildSectionKey(section)
+
+    setExpandedLessons((prev) => new Set(prev).add(targetLesson.id))
+    setCollapsedDays((prev) => {
+      const next = new Set(prev)
+      next.delete(targetLesson.day)
+      return next
+    })
+    setExpandedSectionsForLesson(targetLesson.id, [sectionKey])
+
+    if (lessonIndex === currentLesson) {
+      goToSlide(slideIndex)
+      return
+    }
+
+    pendingSidebarSectionRef.current = { lessonId: targetLesson.id, slideIndex }
+    switchLesson(lessonIndex)
+  }, [currentLesson, goToSlide, setExpandedSectionsForLesson, switchLesson])
 
   const presenterStatusLabel = presenterSyncStatus === 'connected'
     ? 'Audience connected'
@@ -897,33 +1077,30 @@ function App() {
           style={{ WebkitOverflowScrolling: 'touch' }}
         >
 
-        {/* 課程切換（依天分組，可收合） */}
+        {/* 課程切換（依天分組，含每堂課子目錄） */}
         <div className="p-4 border-b border-slate-700/50 flex-shrink-0">
-          {/* 全部收合 / 展開 按鈕 */}
           <button
             onClick={() => {
-              const allCollapsed = days.every(d => collapsedDays.has(d))
-              if (allCollapsed) {
-                // 展開全部，但只展開當前天
-                const currentDay = LESSONS[currentLesson].day
-                setCollapsedDays(new Set(days.filter(d => d !== currentDay)))
+              if (isOnlyCurrentLessonView) {
+                setCollapsedDays(new Set())
+                setExpandedLessons(new Set([lesson.id]))
               } else {
-                // 收合全部，只保留當前天
-                const currentDay = LESSONS[currentLesson].day
-                setCollapsedDays(new Set(days.filter(d => d !== currentDay)))
+                focusCurrentLessonOutline()
               }
             }}
             className="w-full mb-3 px-4 py-2.5 rounded-xl bg-slate-700/60 hover:bg-slate-600/70 border border-slate-600/50 text-slate-300 text-base font-semibold transition-all flex items-center justify-center gap-2"
           >
-            <span>{days.every(d => d === LESSONS[currentLesson].day || collapsedDays.has(d)) ? '📂 展開所有課程' : '📁 只顯示本堂課'}</span>
+            <span>{isOnlyCurrentLessonView ? '📂 展開所有課程' : '📁 只顯示本堂課'}</span>
           </button>
-          {days.map(day => {
+          {days.map((day) => {
             const isCollapsed = collapsedDays.has(day)
-            const hasActiveLesson = LESSONS.some(l => l.day === day && LESSONS.indexOf(l) === currentLesson)
+            const lessonsInDay = LESSONS.filter((item) => item.day === day)
+            const hasActiveLesson = lessonsInDay.some((item) => LESSONS.indexOf(item) === currentLesson)
+
             return (
               <div key={day} className="mb-2">
                 <button
-                  onClick={() => setCollapsedDays(prev => {
+                  onClick={() => setCollapsedDays((prev) => {
                     const next = new Set(prev)
                     if (next.has(day)) next.delete(day)
                     else next.add(day)
@@ -937,22 +1114,161 @@ function App() {
                   <span className="text-base">{isCollapsed ? '▶' : '▼'}</span>
                 </button>
                 {!isCollapsed && (
-                  <div className="space-y-1 mt-1">
-                    {LESSONS.filter(l => l.day === day).map((l) => {
-                      const idx = LESSONS.indexOf(l)
+                  <div className="space-y-2 mt-2">
+                    {lessonsInDay.map((lessonItem) => {
+                      const idx = LESSONS.indexOf(lessonItem)
+                      const isCurrentLesson = idx === currentLesson
+                      const isExpanded = expandedLessons.has(lessonItem.id)
+                      const cachedState = lessonSectionStates[lessonItem.id]
+                      const sectionState = isCurrentLesson
+                        ? { status: loading ? 'loading' as const : 'ready' as const, sections: currentLessonSections }
+                        : cachedState ?? { status: 'idle' as const, sections: [] }
+
                       return (
-                        <button
-                          key={l.id}
-                          onClick={() => switchLesson(idx)}
-                          className={`w-full text-left px-3 py-2 rounded text-base transition-colors ${
-                            idx === currentLesson
-                              ? 'bg-blue-600/30 text-blue-300 font-semibold border border-blue-600/40'
-                              : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
-                          }`}
-                        >
-                          <span className="font-medium">{l.label}</span>
-                          <span className="text-slate-500 ml-1">· {l.title}</span>
-                        </button>
+                        <div key={lessonItem.id} className="rounded-xl border border-slate-700/50 bg-slate-800/30">
+                          <div className="flex items-stretch">
+                            <button
+                              onClick={() => switchLesson(idx)}
+                              className={`flex-1 text-left px-3 py-2.5 rounded-l-xl text-base transition-colors ${
+                                isCurrentLesson
+                                  ? 'bg-blue-600/25 text-blue-300 font-semibold'
+                                  : 'text-slate-300 hover:text-white hover:bg-slate-700/50'
+                              }`}
+                            >
+                              <span className="font-medium">{lessonItem.label}</span>
+                              <span className="text-slate-500 ml-1">· {lessonItem.title}</span>
+                            </button>
+                            <button
+                              type="button"
+                              aria-label={isExpanded ? `收合 ${lessonItem.label} 子目錄` : `展開 ${lessonItem.label} 子目錄`}
+                              aria-expanded={isExpanded}
+                              onClick={() => toggleLessonExpansion(idx)}
+                              className={`w-11 rounded-r-xl border-l border-slate-700/50 text-base transition-colors ${
+                                isExpanded
+                                  ? 'bg-slate-700/70 text-slate-200 hover:bg-slate-600/80'
+                                  : 'bg-slate-800/60 text-slate-400 hover:bg-slate-700/70 hover:text-white'
+                              }`}
+                            >
+                              {isExpanded ? '▼' : '▶'}
+                            </button>
+                          </div>
+
+                          {isExpanded && (
+                            <div className="px-3 pb-3">
+                              <div className="ml-2 mt-2 border-l border-slate-700/60 pl-3 space-y-1.5">
+                                {sectionState.status === 'loading' && (
+                                  <div className="py-2 text-sm text-slate-500">載入章節中...</div>
+                                )}
+                                {sectionState.status === 'error' && (
+                                  <div className="py-2 text-sm text-red-400">無法載入這堂課的章節</div>
+                                )}
+                                {sectionState.status !== 'loading' && sectionState.sections.length === 0 && (
+                                  <div className="py-2 text-sm text-slate-500">沒有可顯示的章節</div>
+                                )}
+                                {sectionState.sections.map((section, sectionIndex) => {
+                                  const active = isCurrentLesson
+                                    ? isCurrentSection(sectionState.sections, sectionIndex, currentSlide)
+                                    : false
+                                  const sectionKey = buildSectionKey(section)
+                                  const expandedSectionKeys = expandedSectionsByLesson[lessonItem.id]
+                                  const isSectionExpanded = Boolean(
+                                    (expandedSectionKeys && expandedSectionKeys.has(sectionKey))
+                                      || (isCurrentLesson && active),
+                                  )
+                                  const completionPercent = section.totalExpectedChars > 0
+                                    ? Math.round((section.totalActualChars / section.totalExpectedChars) * 100)
+                                    : 0
+
+                                  return (
+                                    <div key={`${lessonItem.id}-${sectionKey}`} className="rounded-lg">
+                                      <div className={`flex items-stretch rounded-lg transition-all ${
+                                        active
+                                          ? 'bg-blue-600/20 border border-blue-500/40'
+                                          : 'border border-transparent hover:bg-slate-700/40'
+                                      }`}
+                                      >
+                                        <button
+                                          onClick={() => jumpToLessonSection(idx, section)}
+                                          className="flex-1 px-3 py-2.5 text-left"
+                                        >
+                                          <div className={`text-sm font-semibold leading-snug ${
+                                            active ? 'text-blue-300' : 'text-slate-300'
+                                          }`}
+                                          >
+                                            {section.name}
+                                          </div>
+                                          <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
+                                            <span>{section.totalMinutes} 分鐘</span>
+                                            <span>·</span>
+                                            <span>{section.slideCount} 張</span>
+                                          </div>
+                                          {isAdmin && (
+                                            <div className="mt-1 text-xs text-slate-500">
+                                              預計 {section.totalExpectedChars.toLocaleString()} 字
+                                              <span className="mx-1">·</span>
+                                              實際 {section.totalActualChars.toLocaleString()} 字
+                                              <span className="mx-1">·</span>
+                                              <span className={
+                                                completionPercent >= 80
+                                                  ? 'text-green-400'
+                                                  : completionPercent >= 50
+                                                  ? 'text-yellow-400'
+                                                  : 'text-red-400'
+                                              }
+                                              >
+                                                {completionPercent}%
+                                              </span>
+                                            </div>
+                                          )}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          aria-label={isSectionExpanded ? `收合 ${section.name} 投影片標題` : `展開 ${section.name} 投影片標題`}
+                                          aria-expanded={isSectionExpanded}
+                                          onClick={() => toggleSectionExpansion(lessonItem.id, sectionKey)}
+                                          className={`w-10 rounded-r-lg border-l border-slate-700/50 text-sm transition-colors ${
+                                            isSectionExpanded
+                                              ? 'bg-slate-700/70 text-slate-200 hover:bg-slate-600/80'
+                                              : 'bg-slate-800/60 text-slate-400 hover:bg-slate-700/70 hover:text-white'
+                                          }`}
+                                        >
+                                          {isSectionExpanded ? '▼' : '▶'}
+                                        </button>
+                                      </div>
+
+                                      {isSectionExpanded && (
+                                        <div className="ml-4 mt-1 border-l border-slate-700/60 pl-3 space-y-1">
+                                          {section.slides.map((sectionSlide, slidePosition) => {
+                                            const isActiveSlide = isCurrentLesson && sectionSlide.index === currentSlide
+
+                                            return (
+                                              <button
+                                                key={`${lessonItem.id}-${sectionKey}-${sectionSlide.index}`}
+                                                onClick={() => jumpToLessonSlide(idx, section, sectionSlide.index)}
+                                                className={`w-full rounded-md px-3 py-2 text-left text-sm transition-all ${
+                                                  isActiveSlide
+                                                    ? 'bg-blue-500/20 text-blue-200 border border-blue-500/30'
+                                                    : 'text-slate-400 hover:text-white hover:bg-slate-700/40 border border-transparent'
+                                                }`}
+                                              >
+                                                <div className="flex items-start gap-2">
+                                                  <span className="mt-0.5 text-[11px] text-slate-500">
+                                                    {slidePosition + 1}.
+                                                  </span>
+                                                  <span className="leading-snug">{sectionSlide.title}</span>
+                                                </div>
+                                              </button>
+                                            )
+                                          })}
+                                        </div>
+                                      )}
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       )
                     })}
                   </div>
@@ -960,104 +1276,6 @@ function App() {
               </div>
             )
           })}
-        </div>
-
-        {/* 章節大綱（本堂課） */}
-        <div className="py-3">
-          <button
-            type="button"
-            aria-expanded={!sectionsCollapsed}
-            aria-controls="section-outline-content"
-            onClick={() => setSectionsCollapsed(prev => !prev)}
-            className="w-full px-5 mb-2 flex items-center justify-between text-left"
-          >
-            <span className="text-slate-500 text-sm uppercase tracking-wider">章節大綱</span>
-            <span className="text-slate-500 text-sm">{sectionsCollapsed ? '▶' : '▼'}</span>
-          </button>
-          {!sectionsCollapsed && (
-            <div id="section-outline-content">
-              {loading ? (
-                <div className="px-5 text-slate-500 text-lg">載入中...</div>
-              ) : (
-                <div className="space-y-0.5">
-                  {sections.map((section) => {
-                    const isCurrent = currentSlide >= section.firstIndex &&
-                      (sections[sections.indexOf(section) + 1]
-                        ? currentSlide < sections[sections.indexOf(section) + 1].firstIndex
-                        : true)
-
-                    return (
-                      <button
-                        key={section.name}
-                        onClick={() => goToSlide(section.firstIndex)}
-                        className={`w-full text-left px-5 py-3 transition-all group ${
-                          isCurrent
-                            ? 'bg-blue-600/20 border-l-4 border-blue-500'
-                            : 'hover:bg-slate-700/40 border-l-4 border-transparent'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className={`text-lg font-semibold leading-tight ${
-                            isCurrent ? 'text-blue-300' : 'text-slate-300 group-hover:text-white'
-                          }`}>
-                            {section.name}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-slate-500 text-sm">{section.totalMinutes} 分鐘</span>
-                          <span className="text-slate-600 text-sm">·</span>
-                          <span className="text-slate-500 text-sm">{section.slideCount} 張</span>
-                        </div>
-                        {/* 演講稿字數統計 (admin only) */}
-                        {isAdmin && <div className="mt-2 space-y-1 bg-slate-800/50 rounded-lg p-2">
-                          <div className="flex items-center justify-between">
-                            <span className="text-slate-400 text-sm font-medium">預計</span>
-                            <span className="text-slate-300 text-sm font-bold">{section.totalExpectedChars.toLocaleString()} 字</span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-slate-400 text-sm font-medium">實際</span>
-                            <span className={`text-sm font-bold ${
-                              section.totalActualChars >= section.totalExpectedChars * 0.8
-                                ? 'text-green-400'
-                                : section.totalActualChars >= section.totalExpectedChars * 0.5
-                                ? 'text-yellow-400'
-                                : 'text-red-400'
-                            }`}>
-                              {section.totalActualChars.toLocaleString()} 字
-                            </span>
-                          </div>
-                          {/* 進度條 */}
-                          <div className="h-2 bg-slate-700 rounded-full overflow-hidden mt-1">
-                            <div
-                              className={`h-full rounded-full transition-all ${
-                                section.totalActualChars >= section.totalExpectedChars * 0.8
-                                  ? 'bg-green-500'
-                                  : section.totalActualChars >= section.totalExpectedChars * 0.5
-                                  ? 'bg-yellow-500'
-                                  : 'bg-red-500'
-                              }`}
-                              style={{ width: `${Math.min(100, (section.totalActualChars / section.totalExpectedChars) * 100)}%` }}
-                            />
-                          </div>
-                          <div className="text-right">
-                            <span className={`text-sm font-semibold ${
-                              section.totalActualChars >= section.totalExpectedChars * 0.8
-                                ? 'text-green-400'
-                                : 'text-slate-500'
-                            }`}>
-                              {section.totalExpectedChars > 0
-                                ? `${Math.round((section.totalActualChars / section.totalExpectedChars) * 100)}%`
-                                : '—'}
-                            </span>
-                          </div>
-                        </div>}
-                      </button>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
-          )}
         </div>
 
         {/* 演講稿總字數統計 (admin only) */}

@@ -33,7 +33,7 @@ export const slides: Slide[] = [
           <div className="bg-slate-800/50 p-4 rounded-lg text-center opacity-50">
             <p className="text-2xl mb-1">🐳</p>
             <p className="text-slate-400 font-semibold text-sm">Day 2</p>
-            <p className="text-slate-500 text-xs">Docker 入門</p>
+            <p className="text-slate-500 text-xs">Docker 基礎 + Day 3 擴充</p>
           </div>
           <div className="bg-slate-800/50 p-4 rounded-lg text-center opacity-50">
             <p className="text-2xl mb-1">🔧</p>

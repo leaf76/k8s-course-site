@@ -105,8 +105,8 @@ export const slides: Slide[] = [
         <div className="grid grid-cols-2 gap-3">
           {[
             { day: "Day 1", topic: "Linux 基礎", icon: "🐧", detail: "命令列、檔案系統、權限" },
-            { day: "Day 2", topic: "Linux 實務管理", icon: "🛠️", detail: "程序、服務、套件、排錯" },
-            { day: "Day 3", topic: "Docker 容器", icon: "🐳", detail: "映像、容器、Dockerfile、Compose" },
+            { day: "Day 2", topic: "Docker 基礎 + 擴充", icon: "🐳", detail: "概念、架構、安裝、指令、映像、生命週期、網路、Dockerfile" },
+            { day: "Day 3", topic: "Docker 進階", icon: "🔧", detail: "網路、Volume、Dockerfile、Compose" },
             { day: "Day 4", topic: "K8s 入門", icon: "☸️", detail: "架構、YAML、Pod、Deployment" },
             { day: "Day 5", topic: "工作負載與網路", icon: "🌐", detail: "HPA、Service、Ingress、NetworkPolicy" },
             { day: "Day 6", topic: "組態與儲存", icon: "🗄️", detail: "ConfigMap、Secret、PV/PVC、StatefulSet" },
@@ -131,9 +131,9 @@ export const slides: Slide[] = [
 
 Day 1，我們從 Linux 命令列開始。很多人那天第一次用 SSH 連進一台遠端伺服器，第一次在黑色視窗裡打指令。我記得有同學問我 ls 和 dir 有什麼差別——那個問題很正常，因為這是真的從零開始。我們學了基本的檔案操作、目錄結構、檔案權限的 rwx 讀法，還有如何用 grep 找東西、用 pipe 串接指令。這些技能現在天天都在用，你進 Pod 裡除錯的時候、查 log 的時候，用的都是 Day 1 的東西。
 
-Day 2，我們把 Linux 用到更像真實工作場景：程序與服務管理、日誌與套件安裝、環境變數與常見排錯流程。這一天讓你從「會打指令」進階到「能維運一台主機」，也為後面的容器化打下穩定基礎。
+Day 2，我們正式把 Linux 基礎接上 Docker：先理解環境一致性問題、容器技術與 Docker 架構，再把 Docker 安裝好，真的跑出第一個容器。下午不只做基本指令與 Nginx 實作，還一路延伸到映像、容器生命週期、網路、Port Mapping、Volume 與 Dockerfile，讓第二天就先把完整的容器心智模型建立起來。
 
-Day 3，進入 Docker。我們理解了「容器」這個革命性的概念：把應用程式和它所有的依賴打包成一個可移植的映像，不管在哪台機器上都能跑出一樣的結果。我們學了怎麼寫 Dockerfile，怎麼 build 映像，怎麼 run 容器，怎麼把映像 push 到 Registry。容器是 Kubernetes 的前提，沒有 Day 3，就沒有後面的所有東西。
+Day 3，我們把 Docker 用到更像真實工作場景：容器生命週期管理、網路、Volume、Dockerfile、Compose，全都串在一起。這一天讓你不只是會 run 容器，而是真的具備容器化應用的開發與排錯能力。
 
 Day 4，正式進入 Kubernetes。這一天是很多人的轉折點，因為 K8s 的概念層次比 Docker 複雜很多。我們學了架構、YAML、Pod 是什麼、為什麼需要 Deployment 而不是直接管理 Pod。還記得第一次 kubectl apply 成功的感覺嗎？那個瞬間真的很有成就感。
 
@@ -474,7 +474,7 @@ apply 完 ingress.yaml 之後，用 kubectl get ingress -n demo-app 確認 Ingre
         </div>
         <div className="bg-blue-500/20 border border-blue-500/50 p-3 rounded-lg text-sm">
           <p className="text-blue-400 font-semibold">👀 觀察點</p>
-          <p className="text-slate-300">TARGETS: 15%/70% → 95%/70%　→　REPLICAS: 2 → 4（約 2 分鐘）</p>
+          <p className="text-slate-300">TARGETS: 15%/70% → 95%/70% → REPLICAS: 2 → 4（約 2 分鐘）</p>
         </div>
         <div className="bg-green-900/30 border border-green-700 p-3 rounded-lg text-sm">
           <p className="text-green-400 font-semibold">✅ Ctrl+C 停壓力後</p>
