@@ -1,4 +1,5 @@
 import type { Slide } from './slides/lesson1-morning/index'
+import type { ViewMode } from './types/presentation'
 
 export interface SectionSlideEntry {
   index: number
@@ -18,6 +19,20 @@ export interface SectionEntry {
 export interface OutlineLessonRef {
   id: string
   day: string
+}
+
+export function shouldShowSidebar(viewMode: ViewMode): boolean {
+  return viewMode !== 'audience'
+}
+
+export function expandLessonInOutline(expandedLessons: ReadonlySet<string>, lessonId: string): Set<string> {
+  return new Set(expandedLessons).add(lessonId)
+}
+
+export function revealDayInOutline(collapsedDays: ReadonlySet<string>, day: string): Set<string> {
+  const next = new Set(collapsedDays)
+  next.delete(day)
+  return next
 }
 
 export function buildSections(slides: Slide[]): SectionEntry[] {

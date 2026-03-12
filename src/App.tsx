@@ -23,7 +23,10 @@ import {
   buildFocusedOutlineState,
   buildSectionKey,
   buildSections,
+  expandLessonInOutline,
   isCurrentSection,
+  revealDayInOutline,
+  shouldShowSidebar,
   type SectionEntry,
 } from './sidebarOutline'
 
@@ -319,8 +322,9 @@ function App() {
   const hasReceivedInitialSyncRef = useRef(false)
   const presenterNotesScrollRef = useRef<HTMLDivElement | null>(null)
   const isAudienceView = viewMode === 'audience'
+  const shouldRenderSidebar = shouldShowSidebar(viewMode)
   const isPresenterModeEnabled = viewMode === 'presenter' && Boolean(sessionId)
-  const isMobileSidebar = isMobileViewport && !isPresenterModeEnabled
+  const isMobileSidebar = isMobileViewport && shouldRenderSidebar
   const isSidebarDrawerVisible = isMobileSidebar && sidebarOpen
   const audienceControlsEnabled = canAudienceControlPresenter(viewMode, sessionId, controlToken)
   const channelSenderRole = viewMode === 'presenter' ? 'presenter' : 'audience'
@@ -333,12 +337,8 @@ function App() {
   // 切換課程（同步 URL hash）
   const ensureOutlineLessonVisible = useCallback((idx: number) => {
     const nextLesson = LESSONS[idx]
-    setExpandedLessons((prev) => new Set(prev).add(nextLesson.id))
-    setCollapsedDays((prev) => {
-      const next = new Set(prev)
-      next.delete(nextLesson.day)
-      return next
-    })
+    setExpandedLessons((prev) => expandLessonInOutline(prev, nextLesson.id))
+    setCollapsedDays((prev) => revealDayInOutline(prev, nextLesson.day))
   }, [])
 
   const switchLesson = useCallback((idx: number) => {
@@ -1255,7 +1255,7 @@ function App() {
     <div className="flex min-h-screen overflow-x-clip bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
 
       {/* ===== LEFT SIDEBAR ===== */}
-      {!isPresenterModeEnabled && (
+      {shouldRenderSidebar && (
         <button
           type="button"
           aria-label="Close sidebar"
@@ -1265,7 +1265,7 @@ function App() {
           }`}
         />
       )}
-      {!isPresenterModeEnabled && (
+      {shouldRenderSidebar && (
       <aside
         className={`fixed top-0 left-0 z-30 flex h-[100dvh] max-w-full flex-col overflow-hidden touch-pan-y transition-all duration-300 ${
           isMobileViewport
@@ -1604,7 +1604,7 @@ function App() {
       {/* ===== MAIN CONTENT ===== */}
       <div
         className={`min-w-0 flex-1 flex flex-col transition-all duration-300 ${
-          sidebarOpen && !isPresenterModeEnabled ? 'md:ml-[420px]' : ''
+          shouldRenderSidebar && sidebarOpen ? 'md:ml-[420px]' : ''
         }`}
       >
         {/* Top progress bar */}
@@ -1616,7 +1616,7 @@ function App() {
         </div>
 
         {/* Hamburger Menu Button (Mobile Only) */}
-        {!isPresenterModeEnabled && (
+        {shouldRenderSidebar && (
           <button
             onClick={() => setSidebarOpen(prev => !prev)}
             className="md:hidden fixed top-4 left-4 z-50 p-3 bg-slate-800/90 hover:bg-slate-700 rounded-lg transition-colors border border-slate-600 shadow-lg"
@@ -1987,11 +1987,11 @@ function App() {
 
         {/* Bottom nav */}
         <div className={`fixed bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm border-t border-slate-700/50 z-20 ${
-          sidebarOpen && !isPresenterModeEnabled ? 'md:pl-[420px]' : ''
+          shouldRenderSidebar && sidebarOpen ? 'md:pl-[420px]' : ''
         }`}>
           <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3 px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 sm:px-4">
             <div className="flex flex-1 items-center gap-2 sm:flex-none">
-              {!isPresenterModeEnabled && (
+              {shouldRenderSidebar && (
                 <button
                   onClick={() => setSidebarOpen(prev => !prev)}
                   className="p-2 bg-slate-700/80 hover:bg-slate-600 rounded-lg transition-colors text-slate-300"

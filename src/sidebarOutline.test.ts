@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import type { Slide } from './slides/lesson1-morning/index'
-import { buildFocusedOutlineState, buildSectionKey, buildSections, isCurrentSection } from './sidebarOutline'
+import {
+  buildFocusedOutlineState,
+  buildSectionKey,
+  buildSections,
+  expandLessonInOutline,
+  isCurrentSection,
+  revealDayInOutline,
+  shouldShowSidebar,
+} from './sidebarOutline'
 
 const slides: Slide[] = [
   { title: 'A-1', section: '開場', duration: '2', notes: 'abc' },
@@ -77,5 +85,19 @@ describe('sidebarOutline helpers', () => {
   it('builds a stable key for section expansion state', () => {
     const [firstSection] = buildSections(slides)
     expect(buildSectionKey(firstSection)).toBe('開場::0')
+  })
+
+  it('shows the sidebar in single and presenter modes only', () => {
+    expect(shouldShowSidebar('single')).toBe(true)
+    expect(shouldShowSidebar('presenter')).toBe(true)
+    expect(shouldShowSidebar('audience')).toBe(false)
+  })
+
+  it('keeps manual outline state while revealing the synced lesson and day', () => {
+    expect(Array.from(expandLessonInOutline(new Set(['lesson1-morning']), 'lesson2-afternoon'))).toEqual([
+      'lesson1-morning',
+      'lesson2-afternoon',
+    ])
+    expect(Array.from(revealDayInOutline(new Set(['第一天', '第二天']), '第二天'))).toEqual(['第一天'])
   })
 })
