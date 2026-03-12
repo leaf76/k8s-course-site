@@ -147,6 +147,21 @@ function extractLevelThreeSections(markdown: string): MarkdownSubSection[] {
   return sections
 }
 
+function extractLeadBody(markdown: string): string {
+  const lines = markdown.replace(/\r/g, '').split('\n')
+  const leadLines: string[] = []
+
+  for (const line of lines) {
+    if (line.startsWith('### ')) {
+      break
+    }
+
+    leadLines.push(line)
+  }
+
+  return leadLines.join('\n').trim()
+}
+
 function pushChunk(
   chunks: MarkdownChunk[],
   title: string,
@@ -509,6 +524,29 @@ function isCodeHeavySection(summary: BulletGroup[], cards: SlideCardSpec[], mark
   return summary.length === 0 && cards.length === 0 && extractCodeBlocks(markdown).length > 0
 }
 
+function normalizeComparableItem(value: string): string {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+function dedupeSummaryAgainstCards(summary: BulletGroup[], cards: SlideCardSpec[]): BulletGroup[] {
+  if (summary.length === 0 || cards.length === 0) {
+    return summary
+  }
+
+  const cardItems = new Set(
+    cards.flatMap((card) => (
+      card.bullets.flatMap((group) => group.items.map(normalizeComparableItem))
+    )),
+  )
+
+  return summary
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => !cardItems.has(normalizeComparableItem(item))),
+    }))
+    .filter((group) => group.items.length > 0)
+}
+
 function allocateChunkDurations(targetTotal: number, count: number): number[] {
   if (count <= 0) {
     return []
@@ -702,13 +740,16 @@ export function buildDockerDay2SlideSpecs(
     outlineSections.forEach((section, index) => {
       const matchingFullSection = fullByTitle.get(section.title)
       const subSections = extractLevelThreeSections(section.body)
-      const summary = collectKeyLines(section.body, 3)
       const cards = subSections
         .map((subSection) => ({
           title: subSection.title,
           bullets: collectKeyLines(subSection.body, 3),
         }))
         .filter((card) => card.bullets.length > 0)
+      const summary = dedupeSummaryAgainstCards(
+        collectKeyLines(extractLeadBody(section.body), 3),
+        cards,
+      )
       const phase = hour <= 3 ? 'morning' : 'afternoon'
       const subtitlePrefix = sourceDay === 2
         ? `Day 2 ${phase === 'morning' ? '上午' : '下午'}`

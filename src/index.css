@@ -118,11 +118,25 @@
 .slide-content-responsive :where(code),
 .slide-content-compact :where(code) {
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .slide-content-responsive :where(div, p, li, span),
 .slide-content-compact :where(div, p, li, span) {
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.slide-content-responsive :where(.font-mono),
+.slide-content-compact :where(.font-mono) {
   overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.slide-content-responsive :where(.break-all),
+.slide-content-compact :where(.break-all) {
+  overflow-wrap: anywhere;
+  word-break: break-all;
 }
 
 .slide-content-responsive :where(table),
