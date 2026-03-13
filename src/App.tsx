@@ -311,6 +311,7 @@ function App() {
   const [manualAudienceUrl, setManualAudienceUrl] = useState<string | null>(null)
   const [copyAudienceUrlState, setCopyAudienceUrlState] = useState<'idle' | 'copied' | 'error'>('idle')
   const [isShareModalOpen, setIsShareModalOpen] = useState(false)
+  const [isEndPresenterConfirmOpen, setIsEndPresenterConfirmOpen] = useState(false)
   const [sharePermissionMode, setSharePermissionMode] = useState<AudienceLinkAccessMode>('read-only')
   const [showPresenterNotesScrollHint, setShowPresenterNotesScrollHint] = useState(false)
   const [presenterNotesTab, setPresenterNotesTab] = useState<'key-points' | 'full-script'>('key-points')
@@ -642,6 +643,28 @@ function App() {
     setPresenterSyncStatus('idle')
   }, [currentLesson, currentSlide, postPresentationMessage, sessionId])
 
+  const closeEndPresenterConfirm = useCallback(() => {
+    setIsEndPresenterConfirmOpen(false)
+  }, [])
+
+  const requestStopPresenterMode = useCallback(() => {
+    setIsEndPresenterConfirmOpen(true)
+  }, [])
+
+  const confirmStopPresenterMode = useCallback(() => {
+    setIsEndPresenterConfirmOpen(false)
+    stopPresenterMode()
+  }, [stopPresenterMode])
+
+  const togglePresenterMode = useCallback(() => {
+    if (isPresenterModeEnabled) {
+      requestStopPresenterMode()
+      return
+    }
+
+    startPresenterMode()
+  }, [isPresenterModeEnabled, requestStopPresenterMode, startPresenterMode])
+
   const copyAudienceUrl = useCallback(async (audienceUrl: string | null) => {
     if (!audienceUrl) {
       return
@@ -672,6 +695,14 @@ function App() {
         return
       }
 
+      if (isEndPresenterConfirmOpen) {
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          closeEndPresenterConfirm()
+        }
+        return
+      }
+
       if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') {
         e.preventDefault(); nextSlide()
       } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
@@ -684,13 +715,10 @@ function App() {
         setSidebarOpen(prev => !prev)
       } else if ((e.key === 'p' || e.key === 'P') && isAdmin) {
         e.preventDefault()
-        if (isPresenterModeEnabled) {
-          stopPresenterMode()
-        } else {
-          startPresenterMode()
-        }
+        togglePresenterMode()
       } else if (e.key === 'Escape') {
         setIsPresenterNotesExpanded(false)
+        setIsEndPresenterConfirmOpen(false)
         setIsShareModalOpen(false)
         setShowMenu(false)
         if (isMobileViewport) {
@@ -700,7 +728,7 @@ function App() {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [audienceNav, isAdmin, isAudienceView, isMobileViewport, isPresenterModeEnabled, nextSlide, prevSlide, startPresenterMode, stopPresenterMode])
+  }, [audienceNav, closeEndPresenterConfirm, isAdmin, isAudienceView, isEndPresenterConfirmOpen, isMobileViewport, nextSlide, prevSlide, togglePresenterMode])
 
   const slide: Slide = slides[currentSlide] || slides[0]
   const lesson = LESSONS[currentLesson]
@@ -1011,17 +1039,19 @@ function App() {
       return
     }
 
+    setIsEndPresenterConfirmOpen(false)
     setIsPresenterNotesExpanded(false)
   }, [isPresenterModeEnabled])
 
   useEffect(() => {
     const shouldLockPageScroll = isMobileViewport && (
       isSidebarDrawerVisible
+      || isEndPresenterConfirmOpen
       || showMenu
       || isShareModalOpen
       || (isAdmin && !isPresenterModeEnabled && showNotes)
     )
-    const shouldLockForOverlay = isPresenterNotesExpanded
+    const shouldLockForOverlay = isPresenterNotesExpanded || isEndPresenterConfirmOpen
 
     if (!shouldLockPageScroll && !shouldLockForOverlay) {
       return
@@ -1036,7 +1066,7 @@ function App() {
       document.body.style.overflow = previousBodyOverflow
       document.documentElement.style.overflow = previousHtmlOverflow
     }
-  }, [isAdmin, isMobileViewport, isPresenterModeEnabled, isPresenterNotesExpanded, isShareModalOpen, isSidebarDrawerVisible, showMenu, showNotes])
+  }, [isAdmin, isEndPresenterConfirmOpen, isMobileViewport, isPresenterModeEnabled, isPresenterNotesExpanded, isShareModalOpen, isSidebarDrawerVisible, showMenu, showNotes])
 
   useEffect(() => {
     if (!isAdmin || !isPresenterModeEnabled) {
@@ -1863,6 +1893,60 @@ function App() {
           </div>
         )}
 
+        {isEndPresenterConfirmOpen && (
+          <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/70 p-0 backdrop-blur-sm sm:items-center sm:p-4">
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="end-presenter-confirm-title"
+              className="mobile-panel max-h-[85vh] overflow-y-auto rounded-b-none p-5 sm:max-w-xl sm:rounded-3xl sm:p-6"
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 id="end-presenter-confirm-title" className="text-xl font-semibold text-white">
+                    End presenter session
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-300">
+                    This will end the current presenter session.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeEndPresenterConfirm}
+                  className="rounded-xl border border-slate-700/80 bg-slate-800/80 px-3 py-1.5 text-sm text-slate-300 transition-colors hover:bg-slate-700 hover:text-white"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="mt-5 rounded-2xl border border-red-900/60 bg-red-950/25 p-4">
+                <ul className="space-y-2 text-sm text-slate-200">
+                  <li>This will end the current presenter session.</li>
+                  <li>The audience window will disconnect.</li>
+                  <li>Existing audience links will need to be generated again.</li>
+                </ul>
+              </div>
+
+              <div className="mt-5 flex flex-wrap items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={closeEndPresenterConfirm}
+                  className="rounded-xl border border-slate-700/80 bg-slate-800/80 px-4 py-2 text-sm font-medium text-slate-300 transition-colors hover:bg-slate-700 hover:text-white"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmStopPresenterMode}
+                  className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-500"
+                >
+                  End Presenter
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {presenterError && (
           <div className="fixed left-3 right-3 top-3 z-40 rounded-2xl border border-red-700/70 bg-red-950/90 p-4 text-red-100 shadow-xl sm:left-auto sm:right-4 sm:top-4 sm:max-w-md">
             <p className="text-sm font-semibold">Presenter mode warning</p>
@@ -2163,13 +2247,7 @@ function App() {
 
                   <div className="flex flex-wrap items-center justify-end gap-2 rounded-2xl border border-slate-700/70 bg-slate-950/70 p-1.5 shadow-lg shadow-slate-950/20">
                     <button
-                      onClick={() => {
-                        if (isPresenterModeEnabled) {
-                          stopPresenterMode()
-                        } else {
-                          startPresenterMode()
-                        }
-                      }}
+                      onClick={togglePresenterMode}
                       className={`min-w-[9.5rem] rounded-xl px-4 py-2 text-sm font-semibold transition-colors sm:min-w-[11rem] ${
                         isPresenterModeEnabled
                           ? 'bg-red-600/90 text-white hover:bg-red-500'
